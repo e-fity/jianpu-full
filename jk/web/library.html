@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>曲库 · 简谱认谱</title>
+<style>
+  :root {
+    --paper:  #E7E8E5;
+    --sheet:  #FCFBF9;
+    --ink:    #1B1D1F;
+    --ink-2:  #6E7377;
+    --ink-3:  #9AA0A2;
+    --rule:   #C9CCC6;
+    --font-ui:    "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+    --font-sheet: "Songti SC", SimSun, "Noto Serif CJK SC", "Source Han Serif SC", serif;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 15px/1.6 var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: baseline; gap: 20px;
+    padding: 14px 28px; background: var(--paper);
+    border-bottom: 1px solid var(--rule);
+  }
+  header h1 {
+    margin: 0; font-family: var(--font-sheet);
+    font-size: 19px; font-weight: 600; letter-spacing: .06em;
+  }
+  header .spacer { flex: 1; }
+  header a {
+    font-size: 14px; padding: 7px 16px; text-decoration: none;
+    color: var(--ink); background: var(--sheet); border: 1px solid var(--ink);
+  }
+  header a:hover { background: var(--ink); color: var(--sheet); }
+
+  main { padding: 24px 28px 56px; max-width: 1500px; }
+
+  /* ── 选歌 ───────────────────────────────────────────── */
+  .picker {
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 18px;
+    padding: 22px 24px;
+    background: var(--sheet); border: 1px solid var(--rule);
+  }
+  .picker label {
+    font-family: var(--font-sheet); font-size: 24px; font-weight: 600;
+  }
+  .picker select {
+    font: inherit; font-size: 15px;
+    min-width: 300px; padding: 9px 12px;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--ink-3); border-radius: 0;
+  }
+  .picker select:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .picker .count { color: var(--ink-2); font-size: 13px; }
+  .picker .why {
+    flex-basis: 100%; margin: 4px 0 0;
+    color: var(--ink-2); font-size: 13.5px;
+  }
+
+  /* ── 一首的详情 ─────────────────────────────────────── */
+  #detail { margin-top: 24px; }
+  #detail .head {
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 28px;
+    padding-bottom: 14px; border-bottom: 1px solid var(--rule);
+  }
+  #detail h2 {
+    margin: 0; font-family: var(--font-sheet);
+    font-size: 27px; font-weight: 600;
+  }
+  #detail dl { display: flex; gap: 26px; margin: 0; }
+  #detail dl div { display: flex; align-items: baseline; gap: 7px; }
+  #detail dt { font-size: 12.5px; color: var(--ink-2); }
+  #detail dd { margin: 0; font-family: var(--font-sheet); font-size: 17px; }
+
+  /* 可编辑的 4 项元信息（曲名/调号/拍号/J）。只改 JSON 里的这 4 个字段，不重跑 OCR。 */
+  .edit {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 20px;
+    margin-top: 16px; padding: 14px 16px;
+    background: var(--sheet); border: 1px solid var(--rule);
+  }
+  @media (min-width: 1200px) { .edit { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  .edit label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+  .edit label > span { flex: 0 0 2.6em; }
+  .edit input {
+    flex: 1; min-width: 0; width: 100%;
+    font: inherit; font-size: 14px; padding: 5px 8px;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--ink-3); border-radius: 0;
+  }
+  .edit input:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .edit .row { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
+  .edit .status { font-size: 12.5px; color: var(--ink-2); }
+  .edit .status.bad { color: var(--proof); }
+
+  .btn {
+    font: inherit; font-size: 14px; padding: 7px 16px;
+    color: var(--ink); background: var(--sheet);
+    border: 1px solid var(--ink); border-radius: 0;
+    text-decoration: none; cursor: pointer;
+  }
+  .btn:hover { background: var(--ink); color: var(--sheet); }
+  .btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+
+  .pair {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 22px;
+    margin-top: 20px; align-items: start;
+  }
+  @media (max-width: 900px) { .pair { grid-template-columns: 1fr; } }
+  .pair figure { margin: 0; }
+  .pair img {
+    display: block; width: 100%; height: auto;
+    background: var(--sheet); border: 1px solid var(--rule);
+  }
+  .pair figcaption {
+    margin-top: 8px; font-size: 12.5px; color: var(--ink-2);
+  }
+  .missing {
+    display: grid; place-items: center; height: 220px;
+    background: var(--sheet); border: 1px dashed var(--ink-3);
+    color: var(--ink-2); font-size: 13px; text-align: center; padding: 12px;
+  }
+
+  .links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+  .links a {
+    padding: 8px 16px; font-size: 13.5px; text-decoration: none;
+    color: var(--ink); background: var(--sheet); border: 1px solid var(--rule);
+  }
+  .links a:hover { border-color: var(--ink); }
+  .links a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  /* 生成视频：后台渲染 + 轮询，按钮旁边显示进度尾巴 */
+  .videobox { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--rule); }
+  .videobox .row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+  .videobox .status { font-size: 12.5px; color: var(--ink-2); }
+  .videobox .status.bad { color: var(--proof); }
+  #video-wrap { margin-top: 16px; }
+  #video {
+    display: block; width: 100%; max-width: 380px; height: auto;
+    background: #0b0d12; border: 1px solid var(--rule);
+  }
+  #video-wrap .srcname { margin: 8px 0 0; }
+  #video-wrap a { color: var(--ink); }
+
+  #empty { margin-top: 40px; color: var(--ink-2); }
+  #empty a { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>简谱认谱 · 曲库</h1>
+  <span class="spacer"></span>
+  <a href="/">上传新图</a>
+</header>
+
+<main>
+  <section class="picker">
+    <label for="song">选择一首歌</label>
+    <select id="song">
+      <option value="">（还没选）</option>
+    </select>
+    <span class="count" id="count"></span>
+    <p class="why">选中后，下面只显示这一首的原谱和识别后的替换图。</p>
+  </section>
+
+  <section id="detail" hidden>
+    <div class="head">
+      <h2 id="title"></h2>
+      <dl>
+        <div><dt>音数</dt><dd id="m-total"></dd></div>
+        <div><dt>没认出/休止</dt><dd id="m-special"></dd></div>
+      </dl>
+    </div>
+
+    <div class="edit">
+      <label><span>曲名</span><input id="e-title"></label>
+      <label><span>调号</span><input id="e-key"></label>
+      <label><span>拍号</span><input id="e-meter"></label>
+      <label><span>J</span><input id="e-tempo" inputmode="decimal"></label>
+      <div class="row">
+        <button class="btn" id="save">保存</button>
+        <span class="status" id="save-status"></span>
+      </div>
+    </div>
+
+    <div class="pair">
+      <figure id="fig-src">
+        <img id="img-src" alt="原谱">
+        <figcaption>原谱</figcaption>
+      </figure>
+      <figure>
+        <img id="img-over" alt="识别后的原位替换图：数字被盖成字母，没认出来的画红框">
+        <figcaption>已替换 —— 数字原位盖成字母，红框处要人工核对</figcaption>
+      </figure>
+    </div>
+
+    <div class="links">
+      <a id="dl-notes">下载 JSON</a>
+      <a id="open-over" target="_blank" rel="noopener">单独打开替换图</a>
+      <a id="open-src" target="_blank" rel="noopener">单独打开原谱</a>
+    </div>
+
+    <div class="videobox">
+      <div class="row" id="video-row">
+        <button class="btn" data-style="tiles">落块视频</button>
+        <button class="btn" data-style="play">谱面跟弹视频</button>
+        <span class="status" id="video-status"></span>
+      </div>
+      <p class="srcname">
+        <strong>落块</strong>：7 车道音游式落块，块高=时值。
+        <strong>谱面跟弹</strong>：上半原谱 + 粉色游标压着当前音，下半**电脑键盘**高亮要按的键
+        （映射2 的三档正好是键盘三排：低音 ZXCVBNM／中音 SDFGHJK／高音 ERTYUIO）。
+        两者都按这首歌的 J 算速度、都带合成的主旋律。
+      </p>
+      <div id="video-wrap" hidden>
+        <video id="video" controls playsinline preload="metadata"></video>
+        <p class="srcname">已渲 <span id="v-info"></span>
+          　<a id="v-dl" download>下载 mp4</a>
+          　<span>拍速取这首歌的 J（在线上填）</span></p>
+      </div>
+    </div>
+  </section>
+
+  <p id="empty" hidden>曲库里还没有结果。先去 <a href="/">上传一张图</a>，识别完就会出现在这里。</p>
+</main>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  let songs = [];
+  let current = null;
+
+  const setStatus = (text, bad) => {
+    const el = $("#save-status");
+    el.textContent = text || "";
+    el.classList.toggle("bad", !!bad);
+  };
+
+  // 保存这 4 项元信息 —— 只改 JSON 的顶层字段，不重跑 OCR（秒回）
+  $("#save").addEventListener("click", async () => {
+    if (!current) return;
+    setStatus("保存中…", false);
+    try {
+      const res = await fetch("/api/meta", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base: current.base,
+          title: $("#e-title").value.trim(),
+          key: $("#e-key").value.trim(),
+          meter: $("#e-meter").value.trim(),
+          tempo_qpm: $("#e-tempo").value.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "保存失败。");
+      Object.assign(current, data.song);
+      $("#title").textContent = current.title;
+      $("#e-tempo").value = current.tempo_qpm ?? "";
+      // 下拉框里那一条也跟着改（标题可能被改过）
+      const opt = [...$("#song").options].find(o => o.value === current.base);
+      if (opt) opt.textContent = `${current.title}（${current.base}）`;
+      setStatus("已保存（没重跑识别）", false);
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
+
+  const blank = (msg) => {
+    const box = document.createElement("div");
+    box.className = "missing";
+    box.textContent = msg;
+    return box;
+  };
+
+  function show(song) {
+    if (!song) { $("#detail").hidden = true; return; }
+    current = song;
+    $("#title").textContent = song.title;
+    $("#m-total").textContent = song.counts.total ?? "—";
+    const u = song.counts.unknown ?? 0, r = song.counts.rests ?? 0;
+    $("#m-special").textContent = `${u} / ${r}`;
+    $("#e-title").value = song.title || "";
+    $("#e-key").value = song.key || "";
+    $("#e-meter").value = song.meter || "";
+    $("#e-tempo").value = song.tempo_qpm ?? "";
+    setStatus(song.tempo_source === "default" || song.tempo_source === "missing"
+      ? "拍速还没定（用的是默认 100）—— 填一个真实的，做视频才是对的速度" : "", false);
+    // 换歌就把上一首的视频收起来，别让人以为那是这一首的
+    $("#video-wrap").hidden = true;
+    $("#video").removeAttribute("src");
+    $("#video-status").textContent = "";
+    setVBusy(false);
+
+    $("#img-over").src = song.overlay_url;
+    $("#open-over").href = song.overlay_url;
+    $("#dl-notes").href = song.notes_url;
+    $("#dl-notes").download = song.base + "_notes.json";
+
+    // 原图是通过 JSON 里的绝对路径找回来的，可能已经不在了
+    const fig = $("#fig-src");
+    fig.innerHTML = "";
+    if (song.has_original) {
+      const img = document.createElement("img");
+      img.id = "img-src";
+      img.alt = "原谱";
+      img.src = song.original_url;
+      const cap = document.createElement("figcaption");
+      cap.textContent = "原谱";
+      fig.append(img, cap);
+      $("#open-src").href = song.original_url;
+      $("#open-src").hidden = false;
+    } else {
+      fig.append(blank("原图找不到了 —— 识别时记录的那个路径已经不存在。"), (() => {
+        const cap = document.createElement("figcaption");
+        cap.textContent = "原谱";
+        return cap;
+      })());
+      $("#open-src").hidden = true;
+    }
+    $("#detail").hidden = false;
+  }
+
+  // ── 生成视频（后台渲，轮询进度）。两种风格各一个按钮 ──────────
+  // 一次要渲几百到几千帧、1~3 分钟，所以**不能在请求里等**：起一个后台进程，
+  // 这里每 2 秒问一次。好处是失败了能看到日志尾巴、页面也不会干等到超时。
+  const vLabel = { tiles: "落块", play: "谱面跟弹" };
+  const vBtns = [...document.querySelectorAll("#video-row button")];
+  const setVBusy = (on) => vBtns.forEach(b => { b.disabled = on; });
+
+  const setVStatus = (text, bad) => {
+    const el = $("#video-status");
+    el.textContent = text || "";
+    el.classList.toggle("bad", !!bad);
+  };
+
+  async function pollVideo(rid, style) {
+    try {
+      const res = await fetch("/api/video/" + rid);
+      const d = await res.json();
+      if (!d.ok) throw new Error(d.error || "查不到渲染状态。");
+      if (d.state === "running") {
+        const tail = (d.log || []).slice(-1)[0] || "";
+        setVStatus(`渲染中…（${vLabel[style]}）已用 ${Math.round(d.seconds)} 秒　${tail}`, false);
+        setTimeout(() => pollVideo(rid, style), 2000);
+        return;
+      }
+      if (d.state === "failed") {
+        setVStatus("渲染失败：" + ((d.log || []).slice(-1)[0] || ""), true);
+        setVBusy(false);
+        return;
+      }
+      // ⚠ 加时间戳防缓存：视频 URL 是固定的（/video/<曲名>/<风格>），重渲之后
+      // 文件名没变，浏览器会把**上一次的视频**从缓存里拿出来放 —— 表现就是
+      // "我明明重渲了，画面还是旧的"。图片那边早就有这个问题，视频这边漏了。
+      const url = d.url + "?v=" + Date.now();
+      $("#video").src = url;
+      $("#v-dl").href = url;
+      $("#v-dl").download = d.name;
+      $("#v-info").textContent =
+        `${vLabel[style]}　耗时 ${Math.round(d.seconds)} 秒，${(d.bytes / 1048576).toFixed(1)} MB`;
+      $("#video-wrap").hidden = false;
+      setVStatus("渲染完成 —— 下面可以直接看，或点「下载 mp4」", false);
+      setVBusy(false);
+    } catch (err) {
+      setVStatus(err.message, true);
+      setVBusy(false);
+    }
+  }
+
+  for (const btn of vBtns) {
+    btn.addEventListener("click", async () => {
+      if (!current) return;
+      const style = btn.dataset.style;
+      $("#video-wrap").hidden = true;
+      setVBusy(true);
+      setVStatus(`正在起「${vLabel[style]}」渲染…`, false);
+      try {
+        const res = await fetch("/api/video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ base: current.base, style }),
+        });
+        const d = await res.json();
+        if (!d.ok) throw new Error(d.error || "起不了渲染。");
+        setVStatus(`渲染中…（${vLabel[style]}，J=${d.tempo_qpm}）`, false);
+        pollVideo(d.rid, style);
+      } catch (err) {
+        setVStatus(err.message, true);
+        setVBusy(false);
+      }
+    });
+  }
+
+  fetch("/api/library").then(r => r.json()).then(data => {
+    songs = data.songs || [];
+    $("#count").textContent = songs.length ? `曲库里有 ${songs.length} 首` : "";
+    const sel = $("#song");
+    for (const s of songs) {
+      const opt = document.createElement("option");
+      opt.value = s.base;
+      opt.textContent = `${s.title}（${s.base}）`;
+      sel.append(opt);
+    }
+    $("#empty").hidden = songs.length > 0;
+    sel.addEventListener("change", () => show(songs.find(s => s.base === sel.value)));
+  }).catch(() => {
+    $("#empty").textContent = "读曲库失败了：服务端没响应。";
+    $("#empty").hidden = false;
+  });
+})();
+</script>
+</body>
+</html>

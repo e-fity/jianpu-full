@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>简谱认谱</title>
+<style>
+  :root {
+    --paper:  #E7E8E5;
+    --sheet:  #FCFBF9;
+    --ink:    #1B1D1F;
+    --ink-2:  #6E7377;
+    --ink-3:  #9AA0A2;
+    --rule:   #C9CCC6;
+    --proof:  #B5352A;
+    --low:    #3D6B99;
+    --mid:    #A5701C;
+    --high:   #3E7A4B;
+
+    --font-ui:    "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+    --font-sheet: "Songti SC", SimSun, "Noto Serif CJK SC", "Source Han Serif SC", serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  /* hidden 属性靠 `[hidden]{display:none}` 生效，那条是 UA 样式，优先级最低 ——
+     只要哪个 id 规则写了 display（比如 #s-result 的 grid）就会把它压过去，
+     于是"藏起来"的区块照样显示。这条兜底。 */
+  [hidden] { display: none !important; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 15px/1.6 var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── 顶栏 ───────────────────────────────────────────── */
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: baseline; gap: 20px;
+    padding: 14px 28px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--rule);
+  }
+  header h1 {
+    margin: 0;
+    font-family: var(--font-sheet);
+    font-size: 19px; font-weight: 600; letter-spacing: .06em;
+  }
+  header .spacer { flex: 1; }
+
+  .btn {
+    font: inherit; font-size: 14px;
+    padding: 7px 16px;
+    color: var(--ink); background: var(--sheet);
+    border: 1px solid var(--ink); border-radius: 0;
+    text-decoration: none;          /* 「曲库」是个 <a>，要去掉下划线 */
+    cursor: pointer;
+  }
+  .btn:hover { background: var(--ink); color: var(--sheet); }
+  .btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+  .btn[disabled] { color: var(--ink-3); border-color: var(--rule); cursor: default; }
+  .btn[disabled]:hover { background: var(--sheet); color: var(--ink-3); }
+
+  /* ── 状态区 ─────────────────────────────────────────── */
+  main { padding: 24px 28px 40px; }
+  .state { max-width: 620px; margin: 8vh auto 0; }
+
+  .drop {
+    display: block;
+    padding: 72px 32px;
+    text-align: center;
+    background: var(--sheet);
+    border: 1px dashed var(--ink-3);
+    cursor: pointer;
+  }
+  .drop:hover, .drop.hot { border-color: var(--ink); border-style: solid; }
+  .drop:focus-within { outline: 2px solid var(--ink); outline-offset: 3px; }
+  .drop-big { display: block; font-family: var(--font-sheet); font-size: 21px; }
+  .drop-sub { display: block; margin-top: 10px; color: var(--ink-2); font-size: 13.5px; }
+
+  .busy-line { font-family: var(--font-sheet); font-size: 21px; margin: 0; }
+  .busy-sub  { margin: 10px 0 0; color: var(--ink-2); font-size: 13.5px; }
+  .bar { height: 1px; margin-top: 26px; background: var(--rule); overflow: hidden; }
+  .bar i { display: block; width: 26%; height: 100%; background: var(--ink); animation: sweep 1.5s ease-in-out infinite; }
+  @keyframes sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(420%); } }
+
+  .err-title { font-family: var(--font-sheet); font-size: 21px; margin: 0 0 8px; color: var(--proof); }
+  .err-msg { margin: 0 0 24px; color: var(--ink-2); font-size: 14px; word-break: break-word; }
+
+  /* ── 结果布局 ───────────────────────────────────────── */
+  #s-result { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 32px; align-items: start; }
+  @media (max-width: 1000px) { #s-result { grid-template-columns: minmax(0, 1fr); } }
+
+  .reveal { animation: rise .38s cubic-bezier(.2,.7,.3,1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+
+  /* 谱面：唯一的重头戏 —— 原谱 ↔ 已替换 的拖动对比 */
+  .cmp {
+    position: relative; line-height: 0;
+    /* fit-content + 居中：容器要**紧包住底图**，右边那张 .src 才能用 inset:0
+       精确对齐（两张图长宽比一样，铺进同一个盒子就是像素级重合）。 */
+    width: fit-content; max-width: 100%; margin: 0 auto;
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+  }
+  /* 尺寸规则：**不放大**，比栏宽还宽就缩到栏宽，高度不限（纵向滚动）。
+     为什么不像一开始那样"压到一屏内"——量过全库 41 张，**38 张高过 900px**、
+     最高 7016px；压到一屏会把 4.png 缩成 0.27×、23.png 缩成 0.10×，数字全糊了。
+     现在这样：小图保持原生尺寸（7.png 516px，本来就是一屏），大图缩到栏宽约两屏高，
+     右栏 sticky 一直可见。要看更大就点「下载替换图」。 */
+  .cmp img { display: block; width: auto; height: auto; max-width: 100%; }
+  .cmp .src { position: absolute; inset: 0; width: 100%; height: 100%; clip-path: inset(0 calc(100% - var(--x, 50%)) 0 0); }
+  .cmp .divider {
+    position: absolute; top: 0; bottom: 0; left: var(--x, 50%);
+    width: 1px; background: var(--ink); pointer-events: none;
+  }
+  .cmp .knob {
+    position: absolute; top: 50%; left: var(--x, 50%);
+    transform: translate(-50%, -50%);
+    width: 36px; height: 36px;
+    display: grid; place-items: center;
+    background: var(--sheet); border: 1px solid var(--ink);
+    font-size: 8px; letter-spacing: 1px; line-height: 1; color: var(--ink);
+    pointer-events: none;
+  }
+  .cmp:focus-within .knob { box-shadow: 0 0 0 2px var(--ink); }
+  .cmp input[type=range] {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    margin: 0; appearance: none; -webkit-appearance: none;
+    background: transparent; cursor: ew-resize;
+  }
+  .cmp input[type=range]:focus { outline: none; }
+  .cmp input[type=range]::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+  .cmp input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 2px; height: 100%; background: transparent; }
+  .cmp input[type=range]::-moz-range-track { height: 100%; background: transparent; }
+  .cmp input[type=range]::-moz-range-thumb { width: 2px; height: 100%; background: transparent; border: 0; }
+
+  .cmp-key {
+    display: flex; justify-content: space-between;
+    margin: 8px 0 0; font-size: 12.5px; color: var(--ink-2);
+  }
+
+  /* 对照栏。用 flex 让表格吃掉剩余高度（而不是给 max-height 猜一个魔数）：
+     整栏高度钉在视口内，右边的「头/元信息/结论/图例/下载」多长都不会把页面撑出滚动条。 */
+  .panel {
+    position: sticky; top: 76px;
+    max-height: calc(100vh - 150px);
+    display: flex; flex-direction: column;
+  }
+
+  .panel h2 {
+    margin: 0;
+    font-family: var(--font-sheet);
+    font-size: 26px; font-weight: 600; line-height: 1.3;
+  }
+  .panel .srcname { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-3); }
+
+  /* 可编辑的 4 项元信息（曲名/调号/拍号/J）。只改这 4 个字段，不重跑 OCR ——
+     它们不参与识别（调号也不影响字母，字母是「度数→键盘键」）。 */
+  .edit {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px;
+    margin: 16px 0 0; padding: 14px 0;
+    border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  }
+  .edit label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+  .edit label > span { flex: 0 0 2.6em; }
+  .edit input {
+    flex: 1; min-width: 0; width: 100%;
+    font: inherit; font-size: 14px; padding: 5px 8px;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--ink-3); border-radius: 0;
+  }
+  .edit input:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .edit .row { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
+  .edit .status { font-size: 12.5px; color: var(--ink-2); }
+  .edit .status.bad { color: var(--proof); }
+  .srcname .hint { color: var(--proof); }
+
+  .verdict { margin: 16px 0 0; font-size: 14px; }
+  .verdict b { font-weight: 400; font-family: var(--font-sheet); font-size: 16px; }
+  .verdict .miss { color: var(--proof); }
+
+  .tablewrap {
+    margin-top: 18px;
+    flex: 1 1 auto;
+    min-height: 140px;          /* 同时也是 flex 的收缩下限（默认 auto 下限是内容高，那就白设了） */
+    overflow: auto;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  /* table-layout:fixed + 在 th 上给列宽：列宽由表头定，不会被某一列的内容撑走
+     （auto 布局下「数字」会把富余宽度全吸掉，各列间距就不匀了）。
+     表头加 nowrap：40px 出头的列装不下「音区」两个字，会折成两行。 */
+  table { width: 100%; table-layout: fixed; border-collapse: collapse; font-family: var(--font-sheet); }
+  thead th {
+    position: sticky; top: 0; z-index: 1;
+    padding: 7px 8px; text-align: right; white-space: nowrap;
+    background: var(--paper);
+    font-family: var(--font-ui); font-size: 12px; font-weight: 400; color: var(--ink-2);
+    border-bottom: 1px solid var(--rule);
+  }
+  thead th:nth-child(1) { width: 20%; }
+  thead th:nth-child(2) { width: 20%; }
+  thead th:nth-child(3) { width: 24%; }
+  thead th:nth-child(4) { width: 36%; text-align: left; }   /* 字母列吃掉剩下的 */
+  tbody td { padding: 3px 8px; line-height: 1.35; border-bottom: 1px solid #E3E4E0; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.idx { text-align: right; color: var(--ink-3); font-size: 12.5px; }
+  td.oct { text-align: right; color: var(--ink-2); font-size: 13px; }
+  td.key { font-size: 16px; font-weight: 600; }
+
+  .reg-low  { color: var(--low); }
+  .reg-mid  { color: var(--mid); }
+  .reg-high { color: var(--high); }
+
+  .row-u td { background: #F7EDEC; }
+  .row-u .key { color: var(--proof); font-weight: 400; }
+  .row-u .num { color: var(--proof); }
+
+  tr.grp td {
+    padding: 12px 8px 3px;
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--font-ui); font-size: 12.5px; color: var(--ink-2);
+  }
+  tr.grp .g-n { float: right; color: var(--ink-3); }
+  tr.grp.first td { padding-top: 6px; }
+
+  /* 用 top 抬升而不是 vertical-align:super —— 后者会把行盒撑高，
+     于是带 ⇧ 的行比别的行高一截，整张表看着参差不齐。 */
+  .sh { font-size: 11px; margin-left: 1px; position: relative; top: -0.35em; color: var(--ink-2); }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 4px 16px;
+    margin: 14px 0 0; font-size: 12.5px; color: var(--ink-2);
+  }
+  .legend span::before { content: "■"; margin-right: 5px; font-size: 9px; vertical-align: 1px; }
+  .legend .l-low::before  { color: var(--low); }
+  .legend .l-mid::before  { color: var(--mid); }
+  .legend .l-high::before { color: var(--high); }
+
+  .links { display: flex; gap: 10px; margin-top: 18px; }
+  .links a {
+    flex: 1; text-align: center;
+    padding: 8px 12px;
+    font-size: 13.5px; text-decoration: none;
+    color: var(--ink); background: var(--sheet); border: 1px solid var(--rule);
+  }
+  .links a:hover { border-color: var(--ink); }
+  .links a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { animation: none; }
+    .bar i { animation: none; width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>简谱认谱</h1>
+  <span class="spacer"></span>
+  <a class="btn" href="/library">曲库</a>
+  <button class="btn" id="pick">上传图片</button>
+</header>
+
+<main>
+  <section class="state" id="s-empty">
+    <label class="drop" id="drop">
+      <span class="drop-big">把简谱图片拖到这里</span>
+      <span class="drop-sub">png、jpg 都行。识别在本机跑，一张大约 15 秒，原图越大越慢。</span>
+      <input type="file" id="file" accept="image/*" hidden>
+    </label>
+
+    <div class="edit">
+      <label><span>曲名</span><input id="p-title" placeholder="留空 = 从页眉读"></label>
+      <label><span>调号</span><input id="p-key" placeholder="留空 = 从页眉读"></label>
+      <label><span>拍号</span><input id="p-meter" placeholder="留空 = 4/4"></label>
+      <label><span>J</span><input id="p-tempo" inputmode="decimal" placeholder="留空 = 100"></label>
+      <div class="row">
+        <span class="status">可以先填这 4 项：填了「曲名 + 调号」就跳过页眉识别（快几秒）。
+          识别完在右边还能改，改完点保存。</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="state" id="s-busy" hidden>
+    <p class="busy-line">正在认谱</p>
+    <p class="busy-sub">已用 <span id="elapsed">0</span> 秒，跑完会自动显示。</p>
+    <div class="bar"><i></i></div>
+  </section>
+
+  <section class="state" id="s-error" hidden>
+    <p class="err-title">这张图没读成</p>
+    <p class="err-msg" id="err-msg"></p>
+    <button class="btn" id="retry">重选一张</button>
+  </section>
+
+  <section id="s-result" hidden>
+    <div>
+      <div class="cmp" id="cmp">
+        <img id="img-overlay" alt="已替换：数字被原位盖成字母；没认出来的画了红框">
+        <img class="src" id="img-src" alt="原谱">
+        <div class="divider"></div>
+        <div class="knob">◀ ▶</div>
+        <input type="range" id="slider" min="0" max="100" value="50" step="0.5"
+               aria-label="拖动对比原谱与已替换">
+      </div>
+      <p class="cmp-key"><span>原谱</span><span>已替换</span></p>
+    </div>
+
+    <aside class="panel">
+      <h2 id="song">—</h2>
+      <p class="srcname" id="srcname"></p>
+
+      <div class="edit">
+        <label><span>曲名</span><input id="e-title" placeholder="（页眉读到的）"></label>
+        <label><span>调号</span><input id="e-key" placeholder="1=C"></label>
+        <label><span>拍号</span><input id="e-meter" placeholder="4/4"></label>
+        <label><span>J</span><input id="e-tempo" inputmode="decimal" placeholder="100"></label>
+        <div class="row">
+          <button class="btn" id="save">保存</button>
+          <span class="status" id="save-status"></span>
+        </div>
+      </div>
+      <p class="srcname">用时 <span id="m-secs">—</span></p>
+
+      <p class="verdict" id="verdict"></p>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr>
+              <th>序号</th>
+              <th class="num">数字</th>
+              <th class="num">音区</th>
+              <th>字母</th>
+            </tr>
+          </thead>
+          <tbody id="tb"></tbody>
+        </table>
+      </div>
+
+      <p class="legend">
+        <span class="l-low">低音</span>
+        <span class="l-mid">中音</span>
+        <span class="l-high">高音</span>
+        <span>⇧ 需要按 Shift</span>
+      </p>
+
+      <div class="links">
+        <a id="dl-json" href="#">下载 JSON</a>
+        <a id="dl-png" href="#">下载替换图</a>
+      </div>
+    </aside>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const views = ["s-empty", "s-busy", "s-error", "s-result"];
+  const show = (id) => views.forEach(v => { $("#" + v).hidden = v !== id; });
+
+  let running = false;
+  let currentBase = null;              // 当前结果在曲库里的名字（保存元信息要用）
+
+  // ── 选图 ─────────────────────────────────────────────
+  const pick = $("#pick");
+  const fileInput = $("#file");
+  const start = (file) => {
+    if (file) run(file);
+  };
+  pick.addEventListener("click", () => fileInput.click());
+  $("#retry").addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    start(fileInput.files[0]);
+    fileInput.value = "";            // 同一张图再选一次也能触发
+  });
+
+  const drop = $("#drop");
+  ["dragenter", "dragover"].forEach(t => drop.addEventListener(t, (e) => {
+    e.preventDefault();
+    drop.classList.add("hot");
+  }));
+  ["dragleave", "drop"].forEach(t => drop.addEventListener(t, (e) => {
+    e.preventDefault();
+    drop.classList.remove("hot");
+  }));
+  drop.addEventListener("drop", (e) => start(e.dataTransfer.files[0]));
+
+  // ── 拖动对比 ─────────────────────────────────────────
+  const cmp = $("#cmp"), slider = $("#slider");
+  slider.addEventListener("input", () => cmp.style.setProperty("--x", slider.value + "%"));
+
+  // ── 保存这 4 项元信息（不重跑 OCR，秒回）────────────────
+  const setStatus = (text, bad) => {
+    const el = $("#save-status");
+    el.textContent = text || "";
+    el.classList.toggle("bad", !!bad);
+  };
+
+  $("#save").addEventListener("click", async () => {
+    if (!currentBase) return;
+    setStatus("保存中…", false);
+    try {
+      const res = await fetch("/api/meta", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base: currentBase,
+          title: $("#e-title").value.trim(),
+          key: $("#e-key").value.trim(),
+          meter: $("#e-meter").value.trim(),
+          tempo_qpm: $("#e-tempo").value.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "保存失败。");
+      $("#song").textContent = data.song.title;
+      $("#e-tempo").value = data.song.tempo_qpm ?? "";
+      setStatus("已保存（没重跑识别）", false);
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
+
+  // ── 跑 ───────────────────────────────────────────────
+  async function run(file) {
+    if (running) return;
+    running = true;
+    // 跑的时候把入口关掉：不然中途点了选图，能选、但 run() 会直接 return，
+    // 用户会以为"选了没反应"。
+    pick.disabled = true;
+    show("s-busy");
+
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      $("#elapsed").textContent = Math.round((Date.now() - t0) / 1000);
+    }, 250);
+
+    const body = new FormData();
+    body.append("image", file);
+    // 先填的 4 项一起交上去（留空就不带，让后端走自动/默认）
+    for (const [key, id] of [["title", "#p-title"], ["key", "#p-key"],
+                             ["meter", "#p-meter"], ["tempo", "#p-tempo"]]) {
+      const value = $(id).value.trim();
+      if (value) body.append(key, value);
+    }
+
+    try {
+      const res = await fetch("/api/convert", { method: "POST", body });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "服务没有给出结果。");
+      render(data);
+      show("s-result");
+      cmp.classList.remove("reveal");
+      void cmp.offsetWidth;
+      cmp.classList.add("reveal");
+    } catch (err) {
+      $("#err-msg").textContent = err.message;
+      show("s-error");
+    } finally {
+      clearInterval(tick);
+      pick.disabled = false;
+      running = false;
+    }
+  }
+
+  const registerOf = (o) => (o < 0 ? "low" : o > 0 ? "high" : "mid");
+
+  function render(data) {
+    currentBase = data.base || null;
+    $("#song").textContent = data.title;
+    $("#srcname").textContent = data.original_name;
+    $("#m-secs").textContent = data.seconds + " 秒";
+    $("#e-title").value = data.title || "";
+    $("#e-key").value = data.key || "";
+    $("#e-meter").value = data.meter || "";
+    $("#e-tempo").value = data.tempo_qpm ?? "";
+    setStatus(data.tempo_source === "default"
+      ? "拍速用的是默认值（谱面没印 ♩=，你也没填）" : "", false);
+
+    const c = data.counts;
+    const parts = [`<b>${c.total}</b> 个音，<b>${c.letters}</b> 个换成了字母`];
+    if (c.rests) parts.push(`<b>${c.rests}</b> 个休止`);
+    if (c.unknown) {
+      parts.push(`<span class="miss"><b>${c.unknown}</b> 个没认出来`
+                 + `（在原位替换图上画了红框）</span>`);
+    }
+    $("#verdict").innerHTML = parts.join("、");
+
+    let html = "";
+    data.lines.forEach((line, li) => {
+      html += `<tr class="grp${li === 0 ? " first" : ""}"><td colspan="4">`
+            + `第 ${line.line} 行<span class="g-n">${line.notes.length} 个音</span></td></tr>`;
+      for (const x of line.notes) {
+        const shift = x.shift ? '<span class="sh">⇧</span>' : "";
+        const digit = x.n === null ? "?" : x.n;
+        const letter = x.letter === null ? "—" : x.letter;
+        html += `<tr class="${x.unknown ? "row-u" : ""}">`
+              + `<td class="idx">${x.index}</td>`
+              + `<td class="num">${digit}</td>`
+              + `<td class="oct num">${x.o}</td>`
+              + `<td class="key reg-${registerOf(x.o)}">${letter}${shift}</td>`
+              + `</tr>`;
+      }
+    });
+    $("#tb").innerHTML = html;
+
+    $("#img-overlay").src = data.overlay_url;
+    $("#img-src").src = data.source_url;
+
+    const base = data.original_name.replace(/\.[^.]+$/, "");
+    const json = $("#dl-json"), png = $("#dl-png");
+    json.href = data.table_url;   json.download = base + "_notes.json";
+    png.href = data.overlay_url;  png.download = base + "_overlay.png";
+
+    slider.value = 50;
+    cmp.style.setProperty("--x", "50%");
+    $(".tablewrap").scrollTop = 0;
+  }
+})();
+</script>
+</body>
+</html>
