@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>小球视频编辑 · 简谱认谱</title>
+<style>
+  :root {
+    --paper:  #E7E8E5;
+    --sheet:  #FCFBF9;
+    --ink:    #1B1D1F;
+    --ink-2:  #6E7377;
+    --ink-3:  #9AA0A2;
+    --rule:   #C9CCC6;
+    --good:   #2E6B3E;
+    --bad:    #A02B1E;
+    --warn:   #8A5A12;
+    --font-ui:    "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+    --font-sheet: "Songti SC", SimSun, "Noto Serif CJK SC", "Source Han Serif SC", serif;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 14px/1.55 var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: baseline; gap: 18px;
+    padding: 12px 24px; background: var(--paper);
+    border-bottom: 1px solid var(--rule);
+  }
+  header h1 {
+    margin: 0; font-family: var(--font-sheet);
+    font-size: 19px; font-weight: 600; letter-spacing: .05em;
+  }
+  header .spacer { flex: 1; }
+  header a { font-size: 13px; color: var(--ink); }
+
+  /* 左边预览、右边控制：桌面上一屏看全，不叠在一起 */
+  main {
+    display: grid; grid-template-columns: minmax(320px, 480px) minmax(560px, 1fr);
+    gap: 20px; padding: 18px 24px 48px; align-items: start;
+  }
+  .card {
+    background: var(--sheet); border: 1px solid var(--rule); padding: 14px 16px;
+  }
+  .card h2 {
+    margin: 0 0 10px; font-size: 13px; font-weight: 600;
+    letter-spacing: .08em; color: var(--ink-2);
+  }
+  /* 竖屏预览按视口高度收：1440x900 的笔记本上，时间轴和下面的卡片也能看见 */
+  #view {
+    display: block; height: min(56vh, 620px); width: auto; max-width: 100%;
+    margin: 0 auto; background: #202226; border: 1px solid var(--rule);
+  }
+  .transport { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .transport button {
+    font: inherit; padding: 6px 14px; background: var(--sheet);
+    border: 1px solid var(--ink); color: var(--ink); cursor: pointer;
+  }
+  .transport button:hover { background: var(--ink); color: var(--sheet); }
+  .transport input[type=range] { flex: 1; min-width: 140px; }
+  .time { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  label.chk { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); }
+
+  .row { display: grid; grid-template-columns: 150px 1fr 62px; gap: 8px; align-items: center; margin: 5px 0; }
+  .row label { color: var(--ink); }
+  .row input[type=range] { width: 100%; }
+  .row input[type=color] { width: 100%; height: 24px; padding: 0; border: 1px solid var(--ink-3); background: var(--sheet); }
+  .row output { font-variant-numeric: tabular-nums; color: var(--ink-2); text-align: right; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 26px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } .grid2 { grid-template-columns: 1fr; } }
+
+  .status { font-size: 13px; }
+  .status.good { color: var(--good); }
+  .status.bad { color: var(--bad); }
+  .status.busy { color: var(--ink-2); }
+  .message { margin: 6px 0 0; font-size: 13px; color: var(--ink-2); }
+  .message.bad { color: var(--bad); }
+  .message.good { color: var(--good); }
+  .note { margin: 6px 0 0; font-size: 12px; color: var(--ink-2); }
+  .note.warn { color: var(--warn); }
+  .srcname { font-size: 12px; color: var(--ink-3); }
+
+  .picker { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  select, input[type=text], input[type=file] {
+    font: inherit; padding: 5px 8px; background: var(--paper);
+    border: 1px solid var(--ink-3); color: var(--ink);
+  }
+  #song { min-width: 240px; }
+  #audio { width: 100%; margin-top: 10px; }
+  #result { width: 100%; max-width: 320px; background: #000; margin-top: 8px; }
+  #export-log {
+    margin-top: 8px; max-height: 120px; overflow: auto; white-space: pre-wrap;
+    font: 11px/1.45 ui-monospace, Consolas, monospace; color: var(--ink-2);
+    background: var(--paper); border: 1px solid var(--rule); padding: 6px 8px;
+  }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .toolbar button {
+    font: inherit; padding: 6px 12px; background: var(--sheet);
+    border: 1px solid var(--ink); color: var(--ink); cursor: pointer;
+  }
+  .toolbar button:hover:not(:disabled) { background: var(--ink); color: var(--sheet); }
+  .toolbar button:disabled { opacity: .45; cursor: not-allowed; }
+  .job-progress { margin-top: 10px; }
+  .job-progress progress { display: block; width: 100%; height: 14px; accent-color: var(--good); }
+  .job-progress output { display: block; margin-top: 3px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .job-progress[data-state="failed"] progress { accent-color: var(--bad); }
+  .job-progress[data-state="failed"] output { color: var(--bad); }
+  #boot { padding: 24px; color: var(--ink-2); }
+  #song-switch-dialog {
+    max-width: 360px; padding: 20px 24px; background: var(--sheet);
+    color: var(--ink); border: 1px solid var(--rule); font: inherit;
+  }
+  #song-switch-dialog::backdrop { background: #0006; }
+  #song-switch-dialog .toolbar { justify-content: flex-end; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>小球视频编辑</h1>
+  <span class="srcname">选一首歌，调尺寸和外观，试听、导出竖屏视频。看到什么样，导出就是什么样。</span>
+  <span class="spacer"></span>
+  <a href="/library">← 回曲库</a>
+</header>
+
+<p id="boot">正在装载编辑页…</p>
+
+<main id="panel" hidden>
+
+  <!-- ── 左：竖屏实时预览 ───────────────────────────── -->
+  <section>
+    <div class="card">
+      <h2>实时预览（竖屏）</h2>
+      <canvas id="view" width="432" height="768"></canvas>
+      <div class="transport">
+        <button id="play" type="button">播放</button>
+        <button id="restart" type="button">重头</button>
+        <input id="timeline" type="range" min="0" max="10" step="0.01" value="0" aria-label="时间轴">
+        <span class="time" id="time-label">0.00 / 0.00 s</span>
+      </div>
+      <label class="chk"><input type="checkbox" id="audio-toggle" checked> 试听音频（同一份合成旋律）</label>
+      <audio id="audio" preload="auto"></audio>
+      <p class="note" id="framing-note" hidden></p>
+      <p class="status busy" id="solve-status">还没选歌</p>
+      <div id="layout-progress-box" class="job-progress" hidden>
+        <progress id="layout-progress" max="100" value="0" aria-label="排版进度"></progress>
+        <output id="layout-progress-label" for="layout-progress" role="status"></output>
+      </div>
+      <p id="pending-note" class="note warn" hidden>正在重排版，导出先停一下…</p>
+      <p class="message" id="message" hidden></p>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>歌曲</h2>
+      <div class="picker">
+        <select id="song"><option value="">— 请选择曲库里的歌 —</option></select>
+        <span class="srcname">或</span>
+        <input type="file" id="import-file" accept=".json,application/json">
+        <span class="srcname">导入 jianpu2letter-notes-v1 JSON</span>
+      </div>
+      <p class="srcname" id="song-title">尚未载入曲谱</p>
+    </div>
+  </section>
+
+  <!-- ── 右：控制面板 ───────────────────────────────── -->
+  <section>
+    <div class="card">
+      <h2>尺寸（会真的改变排版，要重算一遍）</h2>
+      <div id="geometry-rows"></div>
+      <p class="srcname">板厚、小球落点、最小间距跟着板宽和间距一起变，所以改完要重排；
+        排不开的话导出会停用，画面留在上一次能用的样子。</p>
+      <div class="toolbar">
+        <button id="reset" type="button">恢复默认</button>
+        <input type="text" id="settings-name" placeholder="给这套设置起个名" size="16">
+        <button id="save" type="button">保存</button>
+        <select id="saved"></select>
+        <button id="load" type="button">载入</button>
+        <a id="download-settings" href="#" download hidden>下载 JSON</a>
+        <label class="srcname">导入 JSON<input type="file" id="import-settings"
+          accept=".json,application/json"></label>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>外观（都会进入导出的视频）</h2>
+      <div class="grid2" id="visual-rows"></div>
+      <div id="presentation-gui" style="margin-top:16px"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>导出</h2>
+      <div class="toolbar">
+        <select id="export-size">
+          <option value="720x1280">720×1280</option>
+          <option value="1080x1920">1080×1920</option>
+        </select>
+        <select id="export-fps">
+          <option value="30">30 fps</option>
+          <option value="60">60 fps</option>
+        </select>
+        <button id="export-sample" type="button" disabled>导出 10 秒样片</button>
+        <button id="export-song" type="button" disabled>导出整曲</button>
+      </div>
+      <p class="srcname">样片从播放头那里起，最多 10 秒（剩余不足就按剩下的导）；整曲从 0 到结尾。
+        点下去这首歌和所有参数就定下来了，之后改面板也不影响这一次；码率跟着分辨率和帧率自动配，
+        在本机后台生成（不是录屏），画面里没有控制面板、也没有歌词。</p>
+      <div id="export-progress-box" class="job-progress" hidden>
+        <progress id="export-progress" max="100" value="0" aria-label="视频渲染进度"></progress>
+        <output id="export-progress-label" for="export-progress" role="status"></output>
+      </div>
+      <div id="export-log"></div>
+      <video id="result" controls playsinline hidden></video>
+      <p class="toolbar"><a id="download" href="#" download hidden>下载 mp4</a></p>
+    </div>
+  </section>
+</main>
+
+<dialog id="song-switch-dialog" aria-labelledby="song-switch-question">
+  <form method="dialog">
+    <p id="song-switch-question">是否打断当前歌曲排版并切歌</p>
+    <div class="toolbar">
+      <button value="no" autofocus>否</button>
+      <button value="yes">是</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/editor/bundle.js"></script>
+</body>
+</html>
+

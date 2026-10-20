@@ -6,6 +6,11 @@ __pycache__/
 out/
 web_out/
 
+# 歌库原谱（57 首，来自外部网站，版权不明确，只在本机使用）
+# 清单 scores/manifest.json 可以进仓库，它只记录 id/哈希/来源
+scores/*
+!scores/manifest.json
+
 # 生成的视频（每首几 MB，随时能重渲）
 # ⚠ 每加一种视频风格，都要把它的输出后缀补到这里 —— 否则新风格的 mp4 会被提交。
 #   后缀定义在 make_video.py 里：落块=_试演奏 / 跟弹=_跟弹 / 滚坡=_小球下坡

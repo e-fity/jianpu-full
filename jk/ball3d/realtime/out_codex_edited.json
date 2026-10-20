@@ -1,0 +1,1 @@
+{"schema": "web-editor-1", "geometry": {"board_w": 0.28, "board_d": 0.48, "ball_r": 0.1, "spacing": 0.34, "bounce": 1.2}, "visuals": {"board_color": "#7a3f22", "board_tint": 0.85, "wood": 0.5, "arm_color": "#e8c98a", "wall_color": "#2f3a4a", "sun": 2.4, "exposure": 1.35, "glow": 1.5, "bloom": 0.3, "shadows": true, "zoom": 1.1, "oblique": 0.25}}

@@ -1,0 +1,30 @@
+{
+  "source_plank": "D:\\Letter piano jk\\ball3d\\assets\\reference_planks\\reference_planks.blend",
+  "source_slide": "D:\\Letter piano jk\\ball3d\\assets\\reference_slide\\reference_slide.blend",
+  "board_dimensions_gltf": [
+    0.3,
+    0.06,
+    0.5
+  ],
+  "wall_z": -0.242,
+  "wall_embed": 0.008,
+  "example_balls": 0,
+  "objects": {
+    "Board": {
+      "vertices": 434,
+      "polygons": 415
+    },
+    "BoardMount": {
+      "vertices": 454,
+      "polygons": 410
+    },
+    "SlideRails": {
+      "vertices": 7924,
+      "polygons": 7888
+    },
+    "SlideFittings": {
+      "vertices": 10430,
+      "polygons": 10444
+    }
+  }
+}

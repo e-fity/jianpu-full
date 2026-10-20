@@ -1,0 +1,35 @@
+{
+  "blender_version": "4.5.3 LTS",
+  "boards": [
+    {
+      "name": "Plank_01_Pink",
+      "dimensions_m": [
+        0.9412832260131836,
+        4.550000190734863,
+        0.17000000178813934
+      ],
+      "vertices": 42,
+      "closed_manifold": true
+    },
+    {
+      "name": "Plank_02_Ivory",
+      "dimensions_m": [
+        0.9205759167671204,
+        4.650000095367432,
+        0.17000000178813934
+      ],
+      "vertices": 42,
+      "closed_manifold": true
+    },
+    {
+      "name": "Plank_03_Yellow",
+      "dimensions_m": [
+        0.895332932472229,
+        4.5,
+        0.17000000178813934
+      ],
+      "vertices": 42,
+      "closed_manifold": true
+    }
+  ]
+}

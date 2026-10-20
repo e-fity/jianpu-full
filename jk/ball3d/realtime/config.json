@@ -1,0 +1,98 @@
+{
+  "ball": {
+    "screenWidth": 0.074,
+    "transmission": 0.3,
+    "ior": 1.45,
+    "roughness": 0.07,
+    "thicknessDiameters": 1.4,
+    "environmentIntensity": 1.2,
+    "attenuationColor": "#ffaac8",
+    "attenuationDiameters": 1.5,
+    "emissiveColor": "#ffb8d0",
+    "emissiveIntensity": 0.35,
+    "rimColor": "#fff6fa",
+    "rimIntensity": 4
+  },
+  "boards": {
+    "sideDiameters": 1.05,
+    "glowStrength": 1,
+    "rodLengthWidths": 0.8,
+    "maxTilt": 35,
+    "dampingRatio": 0.2,
+    "angularFrequency": 30,
+    "hitWindow": 2
+  },
+  "camera": {
+    "fov": 37,
+    "yaw": 0,
+    "sigma": 1,
+    "samples": 97,
+    "downwardTilt": 25,
+    "maxBoardsAcross": 7,
+    "pastWindow": 2,
+    "futureWindow": 3,
+    "travelOffset": 0.17,
+    "directionSoftness": 0.4,
+    "edgeMargin": 0.035,
+    "deadZoneX": 0.16,
+    "deadZoneY": 0.12
+  },
+  "environment": {
+    "file": "studio_small_09_1k.hdr",
+    "intensity": 0.55,
+    "rotation": 1.2
+  },
+  "dof": {
+    "enabled": true,
+    "aperture": 0.007,
+    "maxblur": 0.009
+  },
+  "physics": {
+    "gravity": 9.81,
+    "spacingWidths": 2.2,
+    "descentWidths": 0.2,
+    "leadFlight": 0.65
+  },
+  "shadow": {
+    "opacity": 0.28,
+    "radiusWidths": 0.55,
+    "heightSpread": 0.35,
+    "heightFade": 2,
+    "baseDistanceWidths": 0.35,
+    "heightDistance": 0.9,
+    "lightOffsetX": 0.15
+  },
+  "tracks": {
+    "longMedianFactor": 2,
+    "longMinSeconds": 0.5,
+    "glissMinNotes": 4,
+    "glissMedianFactor": 0.5,
+    "glissMaxSemitones": 2,
+    "minFlightSeconds": 0.2,
+    "maxLengthWidths": 5,
+    "longSlopeWidths": 0.3,
+    "glissSlopeWidths": 0.8,
+    "integrationSteps": 1024,
+    "solveIterations": 40,
+    "timeTolerance": 1e-05,
+    "trailSeconds": 0.7,
+    "beadSeconds": 0.3
+  },
+  "spatial": {
+    "enabled": true,
+    "seed": 20261013,
+    "speed": 1.5,
+    "minStepWidths": 1.25,
+    "maxStepWidths": 1.5,
+    "pitchScale": 0.25,
+    "maxRails": 3,
+    "longNoteRails": false,
+    "glissandoRails": false,
+    "wallMounted": true,
+    "layeredPhrases": true,
+    "wallDropWidths": 2,
+    "levelPhraseGap": 4,
+    "levelMaxNotes": 6,
+    "maxRestSeconds": 3
+  }
+}

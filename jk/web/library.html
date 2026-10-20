@@ -107,6 +107,7 @@
     text-decoration: none; cursor: pointer;
   }
   .btn:hover { background: var(--ink); color: var(--sheet); }
+  .btn.link { display: inline-block; }
   .btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 
   .pair {
@@ -122,25 +123,68 @@
   .pair figcaption {
     margin-top: 8px; font-size: 12.5px; color: var(--ink-2);
   }
+  .score-location { position: relative; }
+  #lyric-highlight { position: absolute; border: 2px solid #d65b00; outline: 2px solid white; pointer-events: none; }
+  #lyrics-preview { margin-top: 16px; padding: 14px; background: var(--sheet); border: 1px solid var(--rule); }
+  .lyrics-scroll { overflow-x: auto; margin: 12px 0; }
+  #lyrics-preview table { width: 100%; border-collapse: collapse; text-align: left; }
+  #lyrics-preview th, #lyrics-preview td { padding: 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  #lyrics-preview td { white-space: normal; overflow-wrap: anywhere; }
+  #lyrics-preview input { width: 18px; height: 18px; vertical-align: middle; }
   .missing {
     display: grid; place-items: center; height: 220px;
     background: var(--sheet); border: 1px dashed var(--ink-3);
     color: var(--ink-2); font-size: 13px; text-align: center; padding: 12px;
   }
 
-  .links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+  .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 22px; }
+  .action-panel {
+    min-width: 0; padding: 18px 20px;
+    background: var(--sheet); border: 1px solid var(--rule);
+  }
+  .action-panel h3, .section-heading h3 { margin: 0; font-size: 16px; font-weight: 600; }
+  .panel-help { margin: 5px 0 14px; color: var(--ink-2); font-size: 13px; }
+  .tool-actions, .links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .tool-actions .btn, .links a { min-height: 38px; }
   .links a {
-    padding: 8px 16px; font-size: 13.5px; text-decoration: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 7px 12px; font-size: 13.5px; text-decoration: none;
     color: var(--ink); background: var(--sheet); border: 1px solid var(--rule);
   }
+  .links a:first-child { border-color: var(--ink); }
   .links a:hover { border-color: var(--ink); }
   .links a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .tool-note { margin: 12px 0 0; font-size: 12.5px; color: var(--ink-2); }
+  .action-panel .status, .videobox .status {
+    margin: 12px 0 0; font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere;
+  }
+  .action-panel .status:empty, .videobox .status:empty { display: none; }
+  .action-panel .status.bad, .videobox .status.bad { color: #B5352A; }
 
-  /* 生成视频：后台渲染 + 轮询，按钮旁边显示进度尾巴 */
-  .videobox { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--rule); }
-  .videobox .row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
-  .videobox .status { font-size: 12.5px; color: var(--ink-2); }
-  .videobox .status.bad { color: var(--proof); }
+  /* 每种视频的说明和入口放在一起，生成进度独占一行。 */
+  .videobox { margin-top: 24px; }
+  .section-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-bottom: 12px; }
+  .section-heading p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+  #video-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .video-option {
+    display: flex; flex-direction: column; min-width: 0; padding: 18px 20px;
+    background: var(--sheet); border: 1px solid var(--rule);
+  }
+  .video-option h4 { margin: 0; font-size: 15px; font-weight: 600; }
+  .video-option p { margin: 6px 0 16px; font-size: 13px; line-height: 1.7; color: var(--ink-2); }
+  .video-option .btn { align-self: flex-start; margin-top: auto; }
+  .video-option .primary { background: var(--ink); color: var(--sheet); }
+  .video-option .primary:hover { background: #3E4245; }
+  .video-option .btn:disabled { color: var(--ink-3); border-color: var(--rule); background: var(--sheet); cursor: default; }
+  @media (max-width: 860px) { .tools-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 700px) {
+    #video-row { grid-template-columns: 1fr; }
+    .links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .action-panel, .video-option { padding: 16px; }
+    .video-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 16px; align-items: center; }
+    .video-option p { grid-column: 1; margin: 0; }
+    .video-option .btn { grid-column: 2; grid-row: 1 / 3; align-self: center; margin: 0; white-space: nowrap; }
+  }
   #video-wrap { margin-top: 16px; }
   #video {
     display: block; width: 100%; max-width: 380px; height: auto;
@@ -197,36 +241,73 @@
         <figcaption>原谱</figcaption>
       </figure>
       <figure>
-        <img id="img-over" alt="识别后的原位替换图：数字被盖成字母，没认出来的画红框">
+        <div class="score-location">
+          <img id="img-over" alt="识别后的原位替换图：数字被盖成字母，没认出来的画红框">
+          <span id="lyric-highlight" hidden></span>
+        </div>
         <figcaption>已替换 —— 数字原位盖成字母，红框处要人工核对</figcaption>
       </figure>
     </div>
 
-    <div class="links">
-      <a id="edit-notes">编辑红框</a>
-      <a id="dl-notes">下载 JSON</a>
-      <a id="open-over" target="_blank" rel="noopener">单独打开替换图</a>
-      <a id="open-src" target="_blank" rel="noopener">单独打开原谱</a>
+    <div class="tools-grid">
+      <section class="action-panel" aria-labelledby="score-tools-title">
+        <h3 id="score-tools-title">曲谱操作</h3>
+        <p class="panel-help">核对识别结果，下载数据或单独查看谱图。</p>
+        <div class="links">
+          <a id="edit-notes">编辑红框</a>
+          <a id="dl-notes">下载 JSON</a>
+          <a id="open-over" target="_blank" rel="noopener">打开替换图</a>
+          <a id="open-src" target="_blank" rel="noopener">打开原谱</a>
+        </div>
+      </section>
+      <section class="action-panel" aria-labelledby="lyrics-tools-title">
+        <h3 id="lyrics-tools-title">歌词更新</h3>
+        <p class="panel-help">同步已有歌词，或从原谱重新识别后逐项核对。</p>
+        <div class="tool-actions">
+          <button class="btn" id="sync-lyrics">同步最新歌词</button>
+          <button class="btn" id="reread-lyrics">从原谱重新识别</button>
+        </div>
+        <p class="tool-note">保存后请重新生成视频，以显示最新歌词。</p>
+        <p class="status" id="lyrics-status" role="status" aria-live="polite"></p>
+      </section>
     </div>
 
-    <div style="margin-top:16px">
-      <button class="btn" id="sync-lyrics">同步最新歌词</button>
-      <p class="status" id="lyrics-status" role="status" aria-live="polite"></p>
-      <p class="srcname">读取 piano11 同名曲目的最新结果，只同步歌词。同步后请重新生成视频。</p>
-    </div>
+    <section id="lyrics-preview" hidden aria-label="歌词修改对照">
+      <strong>歌词修改对照</strong>
+      <p>点击位置可定位谱面。取消勾选的项目不会保存；清空表示删除该处歌词。</p>
+      <label><input type="checkbox" id="lyrics-all" checked> 全选</label>
+      <div class="lyrics-scroll"><table>
+        <thead><tr><th>应用</th><th>位置 / 字母</th><th>类型</th><th>修改前</th><th>修改后</th></tr></thead>
+        <tbody id="lyrics-diff"></tbody>
+      </table></div>
+      <button class="btn" id="apply-lyrics">应用所选修改</button>
+      <button class="btn" id="cancel-lyrics">关闭对照</button>
+      <p id="lyrics-selection" role="status" aria-live="polite"></p>
+    </section>
 
     <div class="videobox">
-      <div class="row" id="video-row">
-        <button class="btn" data-style="tiles">落块视频</button>
-        <button class="btn" data-style="play">谱面跟弹视频</button>
-        <span class="status" id="video-status"></span>
+      <div class="section-heading">
+        <h3>制作视频</h3>
+        <p>沿用当前拍速 J，附带合成主旋律。</p>
       </div>
-      <p class="srcname">
-        <strong>落块</strong>：7 车道音游式落块，块高=时值。
-        <strong>谱面跟弹</strong>：上半原谱 + 粉色游标压着当前音，下半**电脑键盘**高亮要按的键
-        （映射2 的三档正好是键盘三排：低音 ZXCVBNM／中音 SDFGHJK／高音 ERTYUIO）。
-        两者都按这首歌的 J 算速度、都带合成的主旋律。
-      </p>
+      <div id="video-row">
+        <article class="video-option">
+          <h4>落块视频</h4>
+          <p>7 车道节奏落块，块的长短对应音符时值。</p>
+          <button class="btn" data-style="tiles">生成落块视频</button>
+        </article>
+        <article class="video-option">
+          <h4>谱面跟弹视频</h4>
+          <p>谱面游标跟随旋律，同步高亮电脑键盘按键。</p>
+          <button class="btn" data-style="play">生成跟弹视频</button>
+        </article>
+        <article class="video-option">
+          <h4>小球视频编辑</h4>
+          <p>实时预览弹跳画面，调整外观并导出样片或整曲。</p>
+          <a class="btn link primary" id="open-editor" href="/editor">打开编辑器</a>
+        </article>
+      </div>
+      <p class="status" id="video-status" role="status" aria-live="polite"></p>
       <div id="video-wrap" hidden>
         <video id="video" controls playsinline preload="metadata"></video>
         <p class="srcname">已渲 <span id="v-info"></span>
@@ -281,17 +362,115 @@
     }
   });
 
-  $("#sync-lyrics").addEventListener("click", async () => {
+  let lyricPreview = null;
+  function closeLyrics() {
+    lyricPreview = null;
+    $("#lyrics-preview").hidden = true;
+    $("#lyric-highlight").hidden = true;
+  }
+  function selectionChanged() {
+    const boxes = [...document.querySelectorAll("#lyrics-diff input")];
+    const count = boxes.filter(b => b.checked).length;
+    $("#lyrics-selection").textContent = `已选择 ${count} / ${boxes.length} 处修改，尚未保存。`;
+    $("#apply-lyrics").disabled = count === 0;
+    $("#lyrics-all").checked = count === boxes.length;
+    $("#lyrics-all").indeterminate = count > 0 && count < boxes.length;
+  }
+  function showLyricsPreview(result) {
+    lyricPreview = result;
+    const body = $("#lyrics-diff");
+    body.replaceChildren();
+    for (const change of result.changes) {
+      const row = document.createElement("tr");
+      const cell = () => row.appendChild(document.createElement("td"));
+      const check = document.createElement("input");
+      check.type = "checkbox"; check.checked = true; check.value = change.id;
+      check.setAttribute("aria-label", `应用第 ${change.line} 行第 ${change.index} 个音符的修改`);
+      check.addEventListener("change", selectionChanged);
+      cell().append(check);
+      const locate = document.createElement("button");
+      locate.className = "btn";
+      const verse = {lyric: "", lyric2: "（第2段）", lyric3: "（第3段）"}[change.field];
+      locate.textContent = `第 ${change.line} 行 · 第 ${change.index} 个 · ${change.letter || "未识别"}${verse}`;
+      locate.disabled = !change.box;
+      locate.addEventListener("click", async () => {
+        const img = $("#img-over"), mark = $("#lyric-highlight");
+        try { await img.decode(); } catch { return; }
+        if (lyricPreview !== result) return;
+        const [x,y,w,h] = change.box.map(v => v / result.scale);
+        Object.assign(mark.style, {left: `${x / img.naturalWidth * 100}%`, top: `${y / img.naturalHeight * 100}%`,
+          width: `${w / img.naturalWidth * 100}%`, height: `${h / img.naturalHeight * 100}%`});
+        mark.hidden = false;
+        mark.scrollIntoView({behavior: "smooth", block: "center"});
+      });
+      cell().append(locate);
+      cell().textContent = !change.after ? "清空" : !change.before ? "新增" : "替换";
+      cell().textContent = change.before || "（空）";
+      cell().textContent = change.after || "（空）";
+      body.append(row);
+    }
+    $("#lyrics-all").disabled = false;
+    $("#lyrics-preview").hidden = !result.changes.length;
+    selectionChanged();
+  }
+  $("#lyrics-all").addEventListener("change", () => {
+    document.querySelectorAll("#lyrics-diff input").forEach(b => { b.checked = $("#lyrics-all").checked; });
+    selectionChanged();
+  });
+  $("#cancel-lyrics").addEventListener("click", closeLyrics);
+  $("#apply-lyrics").addEventListener("click", async () => {
+    if (!current || !lyricPreview) return;
+    const selected = [...document.querySelectorAll("#lyrics-diff input:checked")].map(b => Number(b.value));
+    const controls = [...document.querySelectorAll("#lyrics-preview input, #lyrics-preview > button, #sync-lyrics, #reread-lyrics, #song")];
+    controls.forEach(b => { b.disabled = true; });
+    try {
+      const response = await fetch("/api/lyrics/apply/" + encodeURIComponent(current.base), {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({token: lyricPreview.token, selected})
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "保存失败。");
+      $("#lyrics-selection").textContent = `已保存 ${result.changed} 处修改；其余 ${lyricPreview.changes.length - result.changed} 处未应用。勾选项为本次已保存项。`;
+      $("#lyrics-status").textContent = "所选歌词已保存，原 JSON 已备份。请重新生成视频以显示新歌词。";
+      $("#dl-notes").href = current.notes_url + "?v=" + Date.now();
+      $("#video").pause(); $("#video-wrap").hidden = true;
+      lyricPreview.saved = true;
+    } catch (error) {
+      $("#lyrics-selection").textContent = error.message;
+    } finally {
+      controls.forEach(b => { b.disabled = false; });
+      if (lyricPreview?.saved) {
+        document.querySelectorAll("#lyrics-preview input, #apply-lyrics").forEach(b => { b.disabled = true; });
+      }
+    }
+  });
+
+  async function updateLyrics(mode) {
     if (!current) return;
     const song = current;
-    const button = $("#sync-lyrics"), status = $("#lyrics-status");
-    button.disabled = true;
+    closeLyrics();
+    const status = $("#lyrics-status");
+    $("#sync-lyrics").disabled = true;
+    $("#reread-lyrics").disabled = true;
     $("#song").disabled = true;
-    status.textContent = "正在核对原图并同步歌词…";
+    const started = Date.now();
+    const progress = () => { status.textContent = mode === "reread"
+      ? `正在从原谱识别并对齐歌词，已用 ${Math.floor((Date.now() - started) / 1000)} 秒…`
+      : "正在核对原图并同步歌词…"; };
+    progress();
+    const timer = mode === "reread" ? setInterval(progress, 1000) : null;
     try {
-      const response = await fetch("/api/lyrics/sync/" + encodeURIComponent(song.base), {method: "POST"});
+      const response = await fetch("/api/lyrics/" + mode + "/" + encodeURIComponent(song.base), {method: "POST"});
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || "同步失败。");
+      clearInterval(timer);
+      if (mode === "reread") {
+        showLyricsPreview(result);
+        status.textContent = `已匹配 ${result.matched} 个音符，发现 ${result.changes.length} 处歌词差异，跳过 ${result.skipped.length} 个。`
+          + (result.changes.length ? "请在下方核对并勾选应用，JSON 尚未修改。" : "已匹配歌词没有差异，JSON 未修改。")
+          + (result.skipped.length ? "需人工核对：" + result.skipped.join("、") : "");
+        return;
+      }
       status.textContent = `已匹配 ${result.matched} 个音符，更新 ${result.changed} 处歌词，跳过 ${result.skipped.length} 个。`
         + (result.changed ? "已备份原 JSON；请重新生成视频。" : "已匹配部分的歌词已是最新。")
         + (result.skipped.length ? "需人工核对：" + result.skipped.join("、") : "");
@@ -303,10 +482,14 @@
     } catch (error) {
       status.textContent = error.message;
     } finally {
-      button.disabled = false;
+      clearInterval(timer);
+      $("#sync-lyrics").disabled = false;
+      $("#reread-lyrics").disabled = false;
       $("#song").disabled = false;
     }
-  });
+  }
+  $("#sync-lyrics").addEventListener("click", () => updateLyrics("sync"));
+  $("#reread-lyrics").addEventListener("click", () => updateLyrics("reread"));
 
   const blank = (msg) => {
     const box = document.createElement("div");
@@ -316,10 +499,13 @@
   };
 
   function show(song) {
+    closeLyrics();
     if (!song) { $("#detail").hidden = true; return; }
     current = song;
     $("#lyrics-status").textContent = "";
     $("#edit-notes").href = "/review/" + encodeURIComponent(song.base);
+    // 3D 编辑页带着当前这首歌过去（它自己也会给一份曲库列表）
+    $("#open-editor").href = "/editor?base=" + encodeURIComponent(song.base);
     $("#title").textContent = song.title;
     $("#m-total").textContent = song.counts.total ?? "—";
     const u = song.counts.unknown ?? 0, r = song.counts.rests ?? 0;
@@ -365,7 +551,7 @@
     $("#detail").hidden = false;
   }
 
-  // ── 生成视频（后台渲，轮询进度）。两种风格各一个按钮 ──────────
+  // ── 生成视频（后台渲，轮询进度）。每种风格各一个按钮 ──────────
   // 一次要渲几百到几千帧、1~3 分钟，所以**不能在请求里等**：起一个后台进程，
   // 这里每 2 秒问一次。好处是失败了能看到日志尾巴、页面也不会干等到超时。
   const vLabel = { tiles: "落块", play: "谱面跟弹" };

@@ -1,0 +1,166 @@
+{
+ "version": "web-editor-1",
+ "geometry": {
+  "board_w": {
+   "kind": "number",
+   "def": 0.3,
+   "label": "板宽",
+   "min": 0.24,
+   "max": 0.4,
+   "step": 0.01,
+   "unit": "m"
+  },
+  "board_d": {
+   "kind": "number",
+   "def": 0.5,
+   "label": "板长（伸出墙面）",
+   "min": 0.28,
+   "max": 2,
+   "step": 0.01,
+   "unit": "m"
+  },
+  "ball_r": {
+   "kind": "number",
+   "def": 0.1,
+   "label": "小球半径",
+   "min": 0.07,
+   "max": 0.14,
+   "step": 0.005,
+   "unit": "m"
+  },
+  "spacing": {
+   "kind": "number",
+   "def": 0.34,
+   "label": "板与板的间距",
+   "min": 0.28,
+   "max": 0.5,
+   "step": 0.01,
+   "unit": "m"
+  },
+  "bounce": {
+   "kind": "number",
+   "def": 1,
+   "label": "长音滑道尺寸",
+   "min": 0.5,
+   "max": 1.8,
+   "step": 0.05,
+   "unit": "x"
+  }
+ },
+ "visuals": {
+  "board_color": {
+   "kind": "color",
+   "def": "#c0763c",
+   "label": "板色"
+  },
+  "board_tint": {
+   "kind": "number",
+   "def": 0,
+   "label": "彩色强度",
+   "min": 0,
+   "max": 1,
+   "step": 0.05,
+   "unit": ""
+  },
+  "wood": {
+   "kind": "number",
+   "def": 1,
+   "label": "木纹",
+   "min": 0,
+   "max": 1,
+   "step": 0.05,
+   "unit": ""
+  },
+  "arm_color": {
+   "kind": "color",
+   "def": "#ddbf81",
+   "label": "金属颜色"
+  },
+  "wall_color": {
+   "kind": "color",
+   "def": "#484c53",
+   "label": "墙色"
+  },
+  "sun": {
+   "kind": "number",
+   "def": 1.8,
+   "label": "主光",
+   "min": 0.4,
+   "max": 3,
+   "step": 0.05,
+   "unit": ""
+  },
+  "exposure": {
+   "kind": "number",
+   "def": 0.95,
+   "label": "曝光",
+   "min": 0.4,
+   "max": 1.8,
+   "step": 0.05,
+   "unit": ""
+  },
+  "glow": {
+   "kind": "number",
+   "def": 1,
+   "label": "击中光晕",
+   "min": 0,
+   "max": 2,
+   "step": 0.05,
+   "unit": ""
+  },
+  "bloom": {
+   "kind": "number",
+   "def": 0.18,
+   "label": "辉光",
+   "min": 0,
+   "max": 0.8,
+   "step": 0.02,
+   "unit": ""
+  },
+  "shadows": {
+   "kind": "boolean",
+   "def": true,
+   "label": "阴影"
+  },
+  "zoom": {
+   "kind": "number",
+   "def": 1,
+   "label": "镜头远近",
+   "min": 0.6,
+   "max": 1.6,
+   "step": 0.05,
+   "unit": "x"
+  },
+  "oblique": {
+   "kind": "number",
+   "def": 0,
+   "label": "斜视角",
+   "min": -1,
+   "max": 1,
+   "step": 0.05,
+   "unit": ""
+  }
+ },
+ "video": {
+  "sizes": {
+   "720x1280": [
+    720,
+    1280
+   ],
+   "1080x1920": [
+    1080,
+    1920
+   ]
+  },
+  "fps": [
+   30,
+   60
+  ],
+  "bitrate_ref": 8000000,
+  "bitrate_ref_pixels": 27648000,
+  "bitrate_min": 200000,
+  "bitrate_max": 80000000,
+  "seconds_min": 0.5,
+  "seconds_max": 600
+ }
+}

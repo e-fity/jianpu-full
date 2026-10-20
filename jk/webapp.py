@@ -12,12 +12,16 @@
 import argparse
 import glob
 from functools import wraps
+from urllib.parse import quote
+import hashlib
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -37,6 +41,8 @@ IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
 ID_RE = re.compile(r"[0-9a-f]{12}")
 
 app = Flask(__name__)
+# 参数表的键序是给人看的（板宽、板长、小球…），别让 jsonify 按字母重排
+app.json.sort_keys = False
 
 # jianpu_api 用的是 ocr_jianpu 的模块全局（底图、缩放倍数），**不是线程安全的**，
 # 所以并发的识别请求必须排队。Flask 仍然 threaded=True —— 那样识别跑着的时候，
@@ -324,6 +330,40 @@ def api_sync_lyrics(base):
     return jsonify({"ok": True, **result})
 
 
+@app.post("/api/lyrics/apply/<base>")
+@_serialize_edits
+def api_apply_lyrics(base):
+    if base not in _song_index():
+        return _fail("曲目不存在。", 404)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _fail("请求格式不正确。", 400)
+    try:
+        result = lyric_sync.apply_lyrics(os.path.join(LIB, base + NOTES_SUFFIX), WORK,
+                                         data.get("token"), data.get("selected"))
+    except ValueError as exc:
+        return _fail(str(exc), 400)
+    except OSError as exc:
+        return _fail(str(exc), 500)
+    return jsonify(ok=True, **result)
+
+
+@app.post("/api/lyrics/reread/<base>")
+@_serialize_edits
+def api_reread_lyrics(base):
+    if base not in _song_index():
+        return _fail("曲库里没有这一首。", 404)
+    started = time.time()
+    try:
+        with _RUN_LOCK:
+            result = lyric_sync.reread_lyrics(os.path.join(LIB, base + NOTES_SUFFIX), WORK)
+    except ValueError as exc:
+        return _fail(str(exc))
+    except Exception as exc:
+        return _fail(f"原谱歌词识别失败：{type(exc).__name__}: {exc}", 500)
+    return jsonify({"ok": True, "seconds": round(time.time() - started, 1), **result})
+
+
 @app.get("/library")
 def library():
     return send_from_directory(WEB, "library.html")
@@ -363,10 +403,27 @@ def library_notes(base):
 # ── 生成「试演奏」视频 ───────────────────────────────────────────────
 # 一次要渲几百到几千帧、约 1~3 分钟，所以**不在请求里等**：起一个后台子进程，
 # 页面轮询进度。这样失败了能看到日志尾巴，页面也不会干等到超时。
-VIDEO_SUFFIX = {"tiles": "_试演奏.mp4", "play": "_跟弹.mp4"}
+VIDEO_SUFFIX = {"tiles": "_试演奏.mp4", "play": "_跟弹.mp4",
+                "music-machine": "_小球弹跳.mp4"}
 _RENDER = {"proc": None, "rid": None, "base": None, "title": "", "log": None,
            "out": None, "style": "tiles", "started": 0.0}
 _RENDER_LOCK = threading.Lock()
+
+# 这台机器上一次只跑一个渲染任务：曲库那个「生成视频」按钮和编辑页的导出
+# 都开浏览器、都吃 GPU，同时跑会互相拖慢甚至把显存顶爆。两边的按钮各拿一个
+# 自己的状态锁，这里再加一把**共用的**闸门，谁先来谁占，另一方拿到 409。
+_GPU_LOCK = threading.Lock()
+
+
+def _busy_render():
+    """谁正占着渲染（编辑页导出 / 旧版生成视频）；空着返回 None。"""
+    proc = _EXPORT["proc"]
+    if proc is not None and proc.poll() is None:
+        return "编辑页导出（%s）" % (_EXPORT["label"] or _EXPORT["rid"])
+    proc = _RENDER["proc"]
+    if proc is not None and proc.poll() is None:
+        return "《%s》的生成视频" % (_RENDER["title"] or _RENDER["base"])
+    return None
 
 
 def _video_path(title, style):
@@ -399,18 +456,27 @@ def api_video_start():
     if song is None:
         return _fail("曲库里没有这一首。", 404)
 
-    with _RENDER_LOCK:
+    with _GPU_LOCK, _RENDER_LOCK:
         proc = _RENDER["proc"]
         if proc is not None and proc.poll() is None:
             return _fail(f"已经在渲《{_RENDER['title'] or _RENDER['base']}》了，"
                          f"等它跑完再点。", 409)
+        busy = _busy_render()
+        if busy:
+            return _fail(f"这台机器上已经有渲染在跑：{busy}，等它跑完再点。", 409)
         rid = uuid.uuid4().hex[:12]
         os.makedirs(WORK, exist_ok=True)
         log_path = os.path.join(WORK, "render_" + rid + ".log")
         out_path = _video_path(song["title"], style)
-        cmd = [sys.executable, os.path.join(HERE, "make_video.py"),
-               os.path.join(LIB, base + NOTES_SUFFIX), "-o", out_path,
-               "--style", style]
+        if style == "music-machine":
+            cmd = [sys.executable, "-u",
+                   os.path.join(HERE, "ball3d", "make_realtime_video.py"),
+                   "--input", os.path.join(LIB, base + NOTES_SUFFIX),
+                   "--output", out_path, "--style", style, "--clean"]
+        else:
+            cmd = [sys.executable, os.path.join(HERE, "make_video.py"),
+                   os.path.join(LIB, base + NOTES_SUFFIX), "-o", out_path,
+                   "--style", style]
         with open(log_path, "wb") as log:
             log.write(("$ " + " ".join(cmd) + "\n").encode("utf-8"))
             log.flush()
@@ -460,6 +526,706 @@ def video_file(base, style):
         return "这首歌还没渲过这种视频（或文件被删了）。", 404
     # conditional=True 支持 Range 请求 —— <video> 拖动进度条要靠它
     return send_file(path, conditional=True)
+
+
+# ── 3D 编辑页（小球视频：几何/视觉可调，同场景导出） ───────────────────
+# 网页只负责「选歌 + 调参 + 预览 + 发起导出」，真正的帧还是 ball3d 里那套
+# three.js + WebCodecs 渲染（同一 layout、同一 GLB、同一相机与绝对时间采样）。
+BALL3D = os.path.join(HERE, "ball3d")
+if BALL3D not in sys.path:
+    sys.path.insert(0, BALL3D)
+import editor_settings  # noqa: E402  （ball3d 里的设置校验，和 JS schema 同源）
+import score as ball_score  # noqa: E402
+
+EDITOR_OUT = os.path.join(BALL3D, "out", "web_editor")
+EDITOR_RUNS = os.path.join(EDITOR_OUT, "runs")
+EDITOR_IMPORTS = os.path.join(EDITOR_OUT, "imports")
+EDITOR_SAVED = os.path.join(EDITOR_OUT, "settings")
+EDITOR_AUDIO = os.path.join(EDITOR_OUT, "audio")
+EDITOR_GLB = os.path.join(BALL3D, "assets", "reference_music_machine.glb")
+EDITOR_LAYOUT_SRC = os.path.join(BALL3D, "realtime", "src", "layout.mjs")
+EDITOR_BUNDLE = os.path.join(BALL3D, "realtime", "build", "editor.bundle.js")
+EDITOR_LAYOUT_WORKER = os.path.join(BALL3D, "realtime", "build", "layout-worker.js")
+EDITOR_CLI = os.path.join(BALL3D, "make_realtime_video.py")
+
+# 一次只跑一个导出：进程、日志、目录都挂在 rid 上
+_EXPORT = {"proc": None, "rid": None, "dir": None, "log": None, "out": None,
+           "label": "", "started": 0.0, "settings": None, "video": None,
+           "song": "", "state": "idle", "error": None, "timing": None}
+_EXPORT_LOCK = threading.Lock()
+NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+IMPORT_RE = re.compile(r"[0-9a-f]{16}")
+
+
+def _node_exe():
+    for cand in (os.environ.get("JPK_NODE"), "D:/node/node.exe", "node"):
+        if not cand:
+            continue
+        if os.path.isabs(cand):
+            if os.path.isfile(cand):
+                return cand
+            continue
+        found = shutil.which(cand)
+        if found:
+            return found
+    return "node"
+
+
+def _run_logged(cmd, log_path, cwd=HERE):
+    """起一个**隐藏窗口**的后台进程，stdout/stderr 进日志文件。"""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    with open(log_path, "wb") as log:
+        log.write(("$ " + " ".join(cmd) + "\n").encode("utf-8"))
+        log.flush()
+        return subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT,
+                                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                                creationflags=flags)
+
+
+def _json_object():
+    """请求体必须是一个 JSON 对象；否则给 400 而不是 500。
+
+    客户端发来 ``[1]``、``"hello"``、``{"base": ["10"]}`` 这类东西时，
+    后面的 ``data.get(...)`` / ``dict(...)`` / 字典查找会直接抛异常并变成
+    500「服务器错误」——那是客户端的错，应该说清楚。
+    """
+    data = request.get_json(silent=True)
+    if data is None:
+        return None, _fail("请求体必须是 JSON。")
+    if not isinstance(data, dict):
+        return None, _fail("请求体必须是一个 JSON 对象（收到 %s）。" % type(data).__name__)
+    return data, None
+
+
+# 浏览器那段渲染的预算：720x1280@30 的 10 秒片子在实测里约 60~100 秒，CLI 默认
+# 只给 300 秒。1080x1920@60 的同样长度是它的 4.5 倍（像素 2.25x x 帧 2x），默认
+# 值会把一个本来能跑完的任务掐死在中途。按 像素 x 帧数 线性放大，再留一倍余量。
+_RENDER_BASELINE_FRAMES = 300.0                 # 720p30 x 10s
+_RENDER_BASELINE_PIXELS = 720.0 * 1280.0
+_RENDER_MIN_TIMEOUT = 300.0
+_RENDER_MAX_TIMEOUT = 5400.0
+
+
+def _render_timeout(video):
+    """按请求的像素和帧数给浏览器渲染留时间（秒）。"""
+    frames = video["frames"]
+    pixels = float(video["width"]) * float(video["height"])
+    scale = (pixels * frames) / (_RENDER_BASELINE_PIXELS * _RENDER_BASELINE_FRAMES)
+    budget = _RENDER_MIN_TIMEOUT * 2.0 * scale           # x2 = 余量，不是估算值
+    return float(min(_RENDER_MAX_TIMEOUT, max(_RENDER_MIN_TIMEOUT, budget)))
+
+
+def _request_number(data, key, default):
+    """请求里的数字：**给了就必须是有限数**，没给才用默认值。
+
+    以前 export 会把 ``"abc"`` / ``null`` / ``NaN`` 悄悄折成默认值继续渲染，
+    结果「点的是这一段、导的是另一段」。布尔（``true`` 在 Python 里就是 1）也
+    不算数字，免得 ``seconds: true`` 变成 1 秒的片子。
+    """
+    if key not in data or data[key] is None:
+        return default, None
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not math.isfinite(value):
+        return None, _fail("%s 必须是有限数字（收到 %r）。" % (key, value))
+    return float(value), None
+
+
+def _text_id(value, what):
+    """可选的名字/编号参数：不是字符串就当它没给，绝不去哈希一个列表。"""
+    if value is None:
+        return None, None
+    if not isinstance(value, str):
+        return None, _fail("%s 必须是字符串。" % what)
+    value = value.strip()
+    return (value or None), None
+
+
+def _song_notes_path(base=None, import_id=None):
+    """曲库歌或导入 JSON 的实际路径（都先核对存在/格式，再拼路径）。"""
+    if import_id:
+        if not IMPORT_RE.fullmatch(str(import_id)):
+            return None, "导入编号不合法。"
+        path = os.path.join(EDITOR_IMPORTS, str(import_id) + ".json")
+        return (path, None) if os.path.isfile(path) else (None, "这份导入已不在。")
+    if base:
+        if not isinstance(base, str) or base not in _song_index():
+            return None, "曲库里没有这一首。"
+        return os.path.join(LIB, base + NOTES_SUFFIX), None
+    return None, "请先选一首歌，或导入一份 JSON。"
+
+
+def _editor_plan(path, max_rest=0.0):
+    """编辑页用的完整 plan：不截断（窗口由 start/seconds 单独描述）。"""
+    sc = ball_score.load_score(path)
+    return ball_score.build_plan(sc, max_rest=max_rest)
+
+
+def _rest_limit(value):
+    """0 .. 20 秒；0 / 非法值 = 不压缩长休止。"""
+    try:
+        limit = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(limit):
+        return 0.0
+    return max(0.0, min(20.0, limit))
+
+
+@app.get("/editor")
+def editor_page():
+    return send_from_directory(WEB, "editor.html")
+
+
+@app.get("/editor/bundle.js")
+def editor_bundle():
+    if not os.path.isfile(EDITOR_BUNDLE):
+        return "编辑页前端还没构建：node realtime/build.mjs", 503
+    resp = send_file(EDITOR_BUNDLE, mimetype="text/javascript")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.get("/editor/layout-worker.js")
+def editor_layout_worker():
+    if not os.path.isfile(EDITOR_LAYOUT_WORKER):
+        return "编辑页后台排版还没构建：node realtime/build.mjs", 503
+    return send_file(EDITOR_LAYOUT_WORKER, mimetype="text/javascript")
+
+
+@app.get("/editor/glb")
+def editor_glb():
+    if not os.path.isfile(EDITOR_GLB):
+        return "缺少 assets/reference_music_machine.glb", 404
+    return send_file(EDITOR_GLB, mimetype="model/gltf-binary", conditional=True)
+
+
+EDITOR_PRESENTATION = os.path.join(BALL3D, "realtime", "config.json")
+
+
+def _presentation_config(raw=None):
+    with open(EDITOR_PRESENTATION, encoding="utf-8") as fp:
+        current = json.load(fp)
+    if raw is None:
+        return current
+    if not isinstance(raw, dict) or raw.keys() != current.keys():
+        raise ValueError("视觉配置字段不完整")
+    with open(os.path.join(BALL3D, "realtime", "presentation_limits.json"), encoding="utf-8") as fp:
+        limits = json.load(fp)
+    for group, fields in current.items():
+        if not isinstance(raw[group], dict) or raw[group].keys() != fields.keys():
+            raise ValueError("视觉配置字段不完整：" + group)
+        for key, value in fields.items():
+            given = raw[group][key]
+            if isinstance(value, bool):
+                valid = isinstance(given, bool)
+            elif isinstance(value, (int, float)):
+                valid = isinstance(given, (int, float)) and not isinstance(given, bool) and limits[key][0] <= given <= limits[key][1]
+                if key in ("seed", "maxRails", "levelPhraseGap", "levelMaxNotes", "maxBoardsAcross", "samples", "glissMinNotes", "glissMaxSemitones", "integrationSteps", "solveIterations"):
+                    valid = valid and int(given) == given
+            elif key.endswith("Color"):
+                valid = isinstance(given, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", given) is not None
+            else:
+                valid = given == value
+            if not valid:
+                raise ValueError("无效视觉参数：" + group + "." + key)
+    return raw
+
+
+@app.route("/api/editor/presentation", methods=["GET", "POST"])
+def api_editor_presentation():
+    try:
+        value = _presentation_config(request.get_json() if request.method == "POST" else None)
+        if request.method == "POST":
+            with open(EDITOR_PRESENTATION, "w", encoding="utf-8") as fp:
+                json.dump(value, fp, ensure_ascii=False, indent=2)
+        return jsonify({"ok": True, "config": value})
+    except (ValueError, TypeError) as exc:
+        return _fail(str(exc))
+
+
+@app.get("/editor/environment")
+def editor_environment():
+    name = _presentation_config()["environment"]["file"]
+    return send_file(os.path.join(BALL3D, "assets", os.path.basename(name)), mimetype="application/octet-stream")
+
+
+@app.get("/editor/layout.mjs")
+def editor_layout_source():
+    if not os.path.isfile(EDITOR_LAYOUT_SRC):
+        return "缺少 realtime/src/layout.mjs", 404
+    resp = send_file(EDITOR_LAYOUT_SRC, mimetype="text/javascript")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.get("/api/editor/schema")
+def api_editor_schema():
+    try:
+        return jsonify({"ok": True, "schema": editor_settings.schema(),
+                        "defaults": editor_settings.defaults()})
+    except editor_settings.SettingsError as exc:
+        return _fail("；".join(exc.errors), 500)
+
+
+@app.get("/api/editor/songs")
+def api_editor_songs():
+    songs = _song_index()
+    out = []
+    for base, song in sorted(songs.items(), key=lambda kv: kv[1].get("title") or kv[0]):
+        counts = song.get("counts") or {}
+        out.append({"base": base, "title": song.get("title") or base,
+                    "tempo_qpm": song.get("tempo_qpm"),
+                    # 曲库索引里音数在 letters（sounding 是 plan 那边的叫法）
+                    "notes": counts.get("letters")})
+    return jsonify({"ok": True, "songs": out})
+
+
+@app.get("/api/editor/plan")
+def api_editor_plan():
+    path, err = _song_notes_path(request.args.get("base"),
+                                 request.args.get("import"))
+    if path is None:
+        return _fail(err, 404)
+    try:
+        plan = _editor_plan(path, _rest_limit(request.args.get("max_rest")))
+    except Exception as exc:                     # noqa: BLE001 - 曲谱本身有问题就直说
+        return _fail("读谱失败：%s" % exc, 400)
+    with open(path, "r", encoding="utf-8") as fp:
+        head = json.load(fp)
+    title = str(head.get("title") or "").strip() or os.path.splitext(
+        os.path.basename(path))[0]
+    return jsonify({"ok": True, "plan": plan, "title": title,
+                    "duration": plan["duration"], "fps": plan["fps"],
+                    "source": os.path.basename(path)})
+
+
+@app.post("/api/editor/import")
+def api_editor_import():
+    raw = request.get_data(cache=False)
+    if not raw:
+        return _fail("没有收到文件内容。")
+    if len(raw) > 4 * 1024 * 1024:
+        return _fail("JSON 太大了（上限 4 MB）。", 413)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        return _fail("不是合法的 JSON：%s" % exc)
+    if not isinstance(data, dict) or data.get("format") != "jianpu2letter-notes-v1":
+        return _fail("格式不对：需要 jianpu2letter-notes-v1。")
+    digest = hashlib.sha1(raw).hexdigest()[:16]
+    os.makedirs(EDITOR_IMPORTS, exist_ok=True)
+    dest = os.path.join(EDITOR_IMPORTS, digest + ".json")   # 内容定名，天然去重
+    if not os.path.isfile(dest):
+        with open(dest, "wb") as fp:
+            fp.write(raw)
+    try:
+        sc = ball_score.load_score(dest)
+    except Exception as exc:                     # noqa: BLE001
+        if os.path.isfile(dest):
+            os.remove(dest)
+        return _fail("这份简谱读不了：%s" % exc, 400)
+    return jsonify({"ok": True, "import": digest,
+                    "title": (sc.get("title") or "").strip() or "导入的谱子",
+                    "notes": len(sc["sounding"]),
+                    "duration": sc["score_duration"]})
+
+
+@app.post("/api/editor/solve")
+def api_editor_solve():
+    data, bad = _json_object()
+    if bad:
+        return bad
+    base, bad = _text_id(data.get("base"), "base")
+    if bad:
+        return bad
+    imp, bad = _text_id(data.get("import"), "import")
+    if bad:
+        return bad
+    path, err = _song_notes_path(base, imp)
+    if path is None:
+        return _fail(err, 404)
+    try:
+        settings = editor_settings.normalize_settings(data.get("settings"))
+    except editor_settings.SettingsError as exc:
+        return jsonify({"ok": False, "error": "；".join(exc.errors),
+                        "errors": exc.errors}), 400
+    max_rest = _rest_limit(data.get("max_rest"))
+    # 每个请求一个目录：两个求解撞在一起时谁也不会读到对方的 solve.json
+    try:
+        plan = _editor_plan(path, max_rest)
+    except Exception as exc:                     # noqa: BLE001 - 曲谱本身有问题就直说
+        return _fail("读谱失败：%s" % exc, 400)
+    tmp = tempfile.mkdtemp(prefix="solve_", dir=EDITOR_RUNS)
+    try:
+        plan_path = os.path.join(tmp, "plan.json")
+        settings_path = os.path.join(tmp, "settings.json")
+        with open(plan_path, "w", encoding="utf-8") as fp:
+            json.dump(plan, fp, ensure_ascii=False)
+        with open(settings_path, "w", encoding="utf-8") as fp:
+            json.dump(settings, fp, ensure_ascii=False)
+        out_json = os.path.join(tmp, "solve.json")
+        cmd = [_node_exe(), os.path.join(BALL3D, "realtime", "tools", "solve_layout.mjs"),
+               "--plan", plan_path, "--settings", settings_path,
+               "--json", out_json, "--quiet", "--config", EDITOR_PRESENTATION]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, cwd=HERE, timeout=300)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return _fail("求解失败：%s" % exc, 500)
+        if not os.path.isfile(out_json):
+            return _fail("求解失败：%s" % proc.stderr.decode("utf-8", "replace")[-400:], 500)
+        with open(out_json, "r", encoding="utf-8") as fp:
+            result = json.load(fp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    result["ok"] = bool(proc.returncode == 0 and result.get("ok"))
+    result["settings"] = settings
+    return jsonify(result)
+
+
+@app.post("/api/editor/export")
+def api_editor_export():
+    data, bad = _json_object()
+    if bad:
+        return bad
+    base, bad = _text_id(data.get("base"), "base")
+    if bad:
+        return bad
+    imp, bad = _text_id(data.get("import"), "import")
+    if bad:
+        return bad
+    path, err = _song_notes_path(base, imp)
+    if path is None:
+        return _fail(err, 404)
+    try:
+        settings = editor_settings.normalize_settings(data.get("settings"))
+    except editor_settings.SettingsError as exc:
+        return jsonify({"ok": False, "error": "；".join(exc.errors),
+                        "errors": exc.errors}), 400
+    video_in = data.get("video")
+    if video_in is None:
+        video_in = {}
+    if not isinstance(video_in, dict):
+        return _fail("video 必须是一个 JSON 对象。")
+    else:
+        video_in = dict(video_in)
+    label, bad = _text_id(data.get("label"), "label")
+    if bad:
+        return bad
+    label = label or "sample"
+    raw_presentation = data.get("presentation")
+    max_rest = 0.0
+    if isinstance(raw_presentation, dict) and isinstance(raw_presentation.get("spatial"), dict):
+        max_rest = _rest_limit(raw_presentation["spatial"].get("maxRestSeconds"))
+    try:
+        plan = _editor_plan(path, max_rest)  # 曲长：整曲与样片都用它夹住窗口
+    except Exception as exc:                 # noqa: BLE001
+        return _fail("读谱失败：%s" % exc, 400)
+    duration = float(plan["duration"])
+    trimmed = False
+    # 窗口的数字先说清楚：给了就必须是有限数。以前这里把 "abc"/null/NaN 悄悄
+    # 当成 0 和 10 去渲染 —— 那是「导了另一段却说是你点的那段」，宁可报错。
+    start, bad = _request_number(video_in, "start", 0.0)
+    if bad:
+        return bad
+    asked, bad = _request_number(video_in, "seconds", 10.0)
+    if bad:
+        return bad
+    if label == "song":                      # 整曲：从头到尾，长度由曲长决定
+        video_in.update({"start": 0.0, "seconds": duration})
+    else:
+        # 短歌：样片不许超出曲子；起点不许被悄悄往前挪（点了哪就是哪）
+        video_in["start"] = start
+        left = duration - start
+        # 剩下正好 0.5s 也算数（和 normalize_video 的下限同一把尺子）
+        if left < editor_settings.TIME_MIN_SECONDS - 1e-9:
+            return _fail("这首歌在 %.2fs 之后没有内容了，往后拖一点再导出。" % start)
+        video_in["seconds"] = min(asked, left)
+        trimmed = bool(video_in["seconds"] < asked)
+    try:
+        video = editor_settings.normalize_video(video_in)
+    except editor_settings.SettingsError as exc:
+        return jsonify({"ok": False, "error": "；".join(exc.errors),
+                        "errors": exc.errors}), 400
+
+    with _GPU_LOCK, _EXPORT_LOCK:
+        proc = _EXPORT["proc"]
+        if proc is not None and proc.poll() is None:
+            return _fail("已经有一个导出在跑（%s），等它结束或失败后再试。"
+                         % (_EXPORT["label"] or _EXPORT["rid"]), 409)
+        busy = _busy_render()
+        if busy:
+            return _fail("这台机器上已经有渲染在跑：%s，等它跑完再试。" % busy, 409)
+        if not os.path.isfile(EDITOR_BUNDLE):
+            return _fail("编辑页前端还没构建：node realtime/build.mjs", 503)
+        rid = uuid.uuid4().hex[:12]
+        run_dir = os.path.join(EDITOR_RUNS, rid)      # 每个任务一个唯一目录
+        os.makedirs(run_dir, exist_ok=True)
+        # 冻结这首歌：把曲谱复制进任务目录，之后曲库/导入文件怎么变都与它无关
+        frozen_path = os.path.join(run_dir, os.path.basename(path))
+        shutil.copyfile(path, frozen_path)
+        with open(os.path.join(run_dir, "song.json"), "w", encoding="utf-8") as fp:
+            json.dump({"source": os.path.basename(path), "frozen": frozen_path,
+                       "base": base, "import": imp, "duration": duration,
+                       "settings": settings, "video": video},
+                      fp, ensure_ascii=False, indent=1)
+        presentation_path = os.path.join(run_dir, "config.json")
+        try:
+            presentation = _presentation_config(data.get("presentation"))
+        except (ValueError, TypeError) as exc:
+            return _fail(str(exc))
+        with open(presentation_path, "w", encoding="utf-8") as fp:
+            json.dump(presentation, fp, ensure_ascii=False, indent=2)
+        settings_path = os.path.join(run_dir, "settings.json")
+        out_path = os.path.join(run_dir, "clip.mp4")
+        log_path = os.path.join(run_dir, "render.log")
+        with open(settings_path, "w", encoding="utf-8") as fp:
+            json.dump(settings, fp, ensure_ascii=False, indent=1)
+        cmd = [sys.executable, "-u", EDITOR_CLI,
+               "--input", frozen_path, "--output", out_path, "--style", "music-machine",
+               "--settings", settings_path, "--config", presentation_path,
+               "--start", repr(float(video["start"])),
+               "--seconds", repr(float(video["seconds"])),
+               "--width", str(video["width"]), "--height", str(video["height"]),
+               "--fps", str(video["fps"]), "--bitrate", str(video["bitrate"]),
+               "--max-rest", repr(max_rest),
+               "--timeout", repr(_render_timeout(video)),
+               "--node", _node_exe(),
+               "--timing", os.path.join(run_dir, "timing.json")]
+        qa = data.get("qa_frames")
+        if isinstance(qa, list):
+            frames = [int(v) for v in qa
+                      if isinstance(v, int) and not isinstance(v, bool)
+                      and 0 <= v < video["frames"]]
+            if frames:
+                cmd += ["--qa-frames", ",".join(str(v) for v in frames)]
+        _EXPORT.update({"proc": _run_logged(cmd, log_path), "rid": rid,
+                        "dir": run_dir, "log": log_path, "out": out_path,
+                        "label": label, "started": time.time(),
+                        "settings": settings, "video": video,
+                        "song": os.path.basename(path),
+                        "state": "running", "error": None, "timing": None, "rendered_frames": 0})
+    return jsonify({"ok": True, "rid": rid, "video": video,
+                    "start": video["start"], "seconds": video["seconds"],
+                    "trimmed": trimmed,
+                    "out": os.path.relpath(out_path, HERE).replace("\\", "/")})
+
+
+def _editor_export_progress(state, video, lines, previous=0):
+    total = video["frames"]
+    frames = previous
+    for line in lines:
+        match = re.search(r"\[realtime\] frame (\d+)/(\d+)", line)
+        if match and int(match[2]) == total:
+            frames = max(frames, min(total, int(match[1])))
+    stage = "准备渲染" if not frames else "逐帧渲染"
+    if frames == total:
+        stage = "合成与校验"
+    percent = min(99, round(100 * frames / total, 1))
+    if state == "done":
+        frames, percent, stage = total, 100, "渲染完成"
+    elif state == "failed":
+        stage = "渲染失败"
+    return {"percent": percent, "stage": stage, "completed": frames, "total": total}
+
+
+@app.get("/api/editor/export/<rid>")
+def api_editor_export_status(rid):
+    if not ID_RE.fullmatch(rid):
+        return _fail("编号不合法。", 404)
+    with _EXPORT_LOCK:
+        if _EXPORT["rid"] != rid:
+            return _fail("没有这个导出任务。", 404)
+        proc = _EXPORT["proc"]
+        if proc is not None and _EXPORT["state"] == "running":
+            code = proc.poll()
+            if code is None:
+                _EXPORT["state"] = "running"
+            elif code == 0 and os.path.isfile(_EXPORT["out"]):
+                _EXPORT["state"] = "done"
+            else:
+                _EXPORT["state"] = "failed"
+                _EXPORT["error"] = "渲染进程退出码 %s，见日志。" % code
+        if _EXPORT["state"] == "done" and _EXPORT["timing"] is None:
+            timing = os.path.join(_EXPORT["dir"], "timing.json")
+            if os.path.isfile(timing):
+                with open(timing, "r", encoding="utf-8") as fp:
+                    _EXPORT["timing"] = json.load(fp)
+        lines = _log_tail(_EXPORT["log"], 64)
+        progress = _editor_export_progress(_EXPORT["state"], _EXPORT["video"], lines,
+                                           _EXPORT.get("rendered_frames", 0))
+        _EXPORT["rendered_frames"] = progress["completed"]
+        info = {
+            "ok": True, "rid": rid, "state": _EXPORT["state"], "error": _EXPORT["error"],
+            "label": _EXPORT["label"], "song": _EXPORT["song"],
+            "video": _EXPORT["video"], "settings": _EXPORT["settings"],
+            "elapsed": round(time.time() - _EXPORT["started"], 1),
+            "log_tail": lines[-8:], "progress": progress,
+        }
+        out = _EXPORT["out"]
+        if _EXPORT["state"] == "done" and out and os.path.isfile(out):
+            info["bytes"] = os.path.getsize(out)
+            info["file"] = "/api/editor/export/%s/file" % rid
+            timing = _EXPORT["timing"] or {}
+            info["frames"] = timing.get("frames")
+            info["decoded_frames"] = timing.get("decoded_frames")
+            info["seconds"] = timing.get("clip_seconds") or timing.get("seconds")
+            info["start"] = timing.get("start")
+            info["timing_ms"] = (timing.get("cli_ms") or {}).get("total")
+    return jsonify(info)
+
+
+@app.get("/api/editor/export/<rid>/file")
+def api_editor_export_file(rid):
+    """完成才给文件；失败/进行中绝不回退到旧视频。"""
+    if not ID_RE.fullmatch(rid):
+        return _fail("编号不合法。", 404)
+    with _EXPORT_LOCK:
+        if _EXPORT["rid"] != rid:
+            return _fail("没有这个导出任务。", 404)
+        state, path = _EXPORT["state"], _EXPORT["out"]
+        if state != "done" or not path or not os.path.isfile(path):
+            return _fail("这次导出还没有完成。", 409)
+        name = "%s_%s_%s.mp4" % (_EXPORT["song"].replace("_notes.json", ""),
+                                 _EXPORT["label"], rid)
+    return send_file(path, download_name=name, conditional=True)
+
+
+# ── 设置（外观/几何）的保存、下载、导入 ────────────────────────────────
+# 名字给人看（中文也行），文件名是它的 sha1：这样「视角 1」这样的名字既能显示
+# 又不会变成路径。JSON 既能整份下载带走，也能再导入回来。
+SAVE_NAME_MAX = 40
+
+
+def _save_name(raw):
+    """Return (display_name, error)."""
+    if not isinstance(raw, str):
+        return None, "设置名字必须是字符串。"
+    name = " ".join(raw.split())
+    if not name:
+        return None, "请给这份设置起个名字。"
+    if len(name) > SAVE_NAME_MAX:
+        return None, "设置名字太长了（上限 %d 个字）。" % SAVE_NAME_MAX
+    if name in (".", "..") or "/" in name or "\\" in name or "\0" in name:
+        return None, "设置名字里不能有斜杠。"
+    return name, None
+
+
+def _save_path(name):
+    return os.path.join(EDITOR_SAVED, hashlib.sha1(name.encode("utf-8")).hexdigest()[:16] + ".json")
+
+
+def _saved_names():
+    os.makedirs(EDITOR_SAVED, exist_ok=True)
+    out = []
+    for entry in glob.glob(os.path.join(EDITOR_SAVED, "*.json")):
+        try:
+            with open(entry, "r", encoding="utf-8") as fp:
+                head = json.load(fp)
+        except (OSError, ValueError):
+            continue
+        name = head.get("name") if isinstance(head, dict) else None
+        if isinstance(name, str) and name:
+            out.append(name)
+    return out
+
+
+@app.post("/api/editor/frame")
+def api_editor_frame():
+    """浏览器预览页送来的 PNG（同设置/同绝对时间/同分辨率的对比图）。"""
+    name = request.args.get("name") or "preview_frame"
+    if not NAME_RE.fullmatch(name):
+        return _fail("图片名不合法。")
+    blob = request.get_data(cache=False)
+    if not blob or not blob.startswith(b"\x89PNG"):
+        return _fail("不是 PNG 数据。")
+    if len(blob) > 24 * 1024 * 1024:
+        return _fail("PNG 太大。", 413)
+    os.makedirs(EDITOR_OUT, exist_ok=True)
+    dest = os.path.join(EDITOR_OUT, name + ".png")
+    with open(dest, "wb") as fp:
+        fp.write(blob)
+    return jsonify({"ok": True, "path": dest, "bytes": len(blob)})
+
+
+@app.get("/api/editor/settings")
+def api_editor_settings_list():
+    return jsonify({"ok": True, "names": sorted(_saved_names())})
+
+
+@app.get("/api/editor/settings/<path:name>/file")
+def api_editor_settings_download(name):
+    """整份 JSON 下载：带走一份能再导入回来的设置。"""
+    name, err = _save_name(name)
+    if err:
+        return _fail(err, 404)
+    path = _save_path(name)
+    if not os.path.isfile(path):
+        return _fail("没有这份设置。", 404)
+    return send_file(path, mimetype="application/json",
+                     download_name=name + ".json", as_attachment=True)
+
+
+@app.get("/api/editor/settings/<path:name>")
+def api_editor_settings_get(name):
+    name, err = _save_name(name)
+    if err:
+        return _fail(err, 404)
+    path = _save_path(name)
+    if not os.path.isfile(path):
+        return _fail("没有这份设置。", 404)
+    with open(path, "r", encoding="utf-8") as fp:
+        head = json.load(fp)
+    return jsonify({"ok": True, "name": name, "settings": head.get("settings")})
+
+
+@app.post("/api/editor/settings/<path:name>")
+def api_editor_settings_put(name):
+    """保存/导入：body 可以是 {"settings": {...}}，也可以是一份设置本体。"""
+    name, err = _save_name(name)
+    if err:
+        return _fail(err)
+    data, bad = _json_object()
+    if bad:
+        return bad
+    payload = data.get("settings")
+    if payload is None:
+        payload = data                 # 导入：整份 JSON 就是设置本身
+    try:
+        settings = editor_settings.normalize_settings(payload)
+    except editor_settings.SettingsError as exc:
+        return jsonify({"ok": False, "error": "；".join(exc.errors),
+                        "errors": exc.errors}), 400
+    os.makedirs(EDITOR_SAVED, exist_ok=True)
+    path = _save_path(name)
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump({"name": name, "settings": settings}, fp,
+                  ensure_ascii=False, indent=1)
+    return jsonify({"ok": True, "name": name, "path": path,
+                    "file": "/api/editor/settings/%s/file" % quote(name)})
+
+
+@app.get("/api/editor/audio")
+def api_editor_audio():
+    """试听用的合成旋律 WAV（和导出用的是同一个 audio.render）。"""
+    path, err = _song_notes_path(request.args.get("base"), request.args.get("import"))
+    if path is None:
+        return _fail(err, 404)
+    max_rest = _rest_limit(request.args.get("max_rest"))
+    key = hashlib.sha1((os.path.abspath(path) + "|"
+                        + str(os.path.getmtime(path)) + "|" + repr(max_rest)).encode("utf-8")).hexdigest()[:16]
+    os.makedirs(EDITOR_AUDIO, exist_ok=True)
+    dest = os.path.join(EDITOR_AUDIO, key + ".wav")
+    if not os.path.isfile(dest):
+        import audio as ball_audio
+        try:
+            plan = _editor_plan(path, max_rest)
+        except Exception as exc:                     # noqa: BLE001
+            return _fail("读谱失败：%s" % exc, 400)
+        tmp = dest + ".part"
+        ball_audio.render_to_wav(plan, tmp)
+        os.replace(tmp, dest)
+    return send_file(dest, mimetype="audio/wav", conditional=True)
 
 
 def main(argv=None):

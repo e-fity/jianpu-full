@@ -8,7 +8,7 @@ import statistics
 import uuid
 
 
-def sync_lyrics(table, review):
+def sync_lyrics(table, review, preview=False):
     table, review = Path(table), Path(review)
     if not review.is_file():
         raise ValueError("找不到 piano11 的同名 _review.json，请先在 piano11 生成这首曲目的最新结果。")
@@ -26,9 +26,10 @@ def sync_lyrics(table, review):
     source_lines = donor.get("lines", [])
     if [l["line"] for l in source_lines] != [l["line"] for l in payload["lines"]]:
         raise ValueError("两边谱行划分不同，不能安全同步，未修改歌词。")
+    changes = []
     matched = changed = 0
     skipped = []
-    for line, source_line in zip(payload["lines"], source_lines):
+    for line_pos, (line, source_line) in enumerate(zip(payload["lines"], source_lines)):
         notes, refs = line["notes"], source_line["notes"]
         # source_x 和 box 均使用 OCR 缩放图坐标。只接受接近且唯一的对应。
         positions = [r.get("source_x") for r in refs]
@@ -55,7 +56,7 @@ def sync_lyrics(table, review):
         anchors = sum(n.get("n")==r.get("n") and n.get("o",0)==r.get("o",0) for n,r in pairs)
         safe = bool(pairs) and anchors >= min(3,len(notes),len(refs)) and len(pairs) >= .6 * len(notes)
         paired = {id(n):r for n,r in pairs} if safe else {}
-        for note in notes:
+        for note_pos, note in enumerate(notes):
             ref = paired.get(id(note))
             if ref is None or not isinstance(ref.get("lyric"), str):
                 skipped.append(f"第 {line['line']} 行第 {note['index']} 个")
@@ -67,6 +68,10 @@ def sync_lyrics(table, review):
                     continue
                 value = ref[field].strip()
                 if str(note.get(field) or "") != value:
+                    changes.append({"id": len(changes), "line_pos": line_pos, "note_pos": note_pos,
+                                    "line": line["line"], "index": note["index"],
+                                    "letter": note.get("letter", ""), "box": note.get("box"),
+                                    "field": field, "before": str(note.get(field) or ""), "after": value})
                     updated = True
                     if value:
                         note[field] = value
@@ -75,16 +80,87 @@ def sync_lyrics(table, review):
             changed += int(updated)
     if not matched:
         raise ValueError("没有找到足够可靠的位置匹配，未修改歌词。")
-    backup_name = None
-    if changed:
-        backup = Path(str(table) + ".before-lyrics-" + uuid.uuid4().hex[:12] + ".bak")
-        backup.write_bytes(original)
-        backup_name = backup.name
-        temporary = Path(str(table) + ".lyrics-tmp")
-        try:
-            temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            os.replace(temporary, table)
-        finally:
-            temporary.unlink(missing_ok=True)
-    return {"matched": matched, "changed": changed, "skipped": skipped,
-            "backup": backup_name, "source": review.name}
+    result = {"matched": matched, "changed": changed, "skipped": skipped, "source": review.name}
+    if preview:
+        result.update(changes=changes, scale=payload.get("scale") or 1,
+                      revision=hashlib.sha256(original).hexdigest(), table=str(table.resolve()))
+    else:
+        result["backup"] = _save_lyrics(table, original, payload) if changed else None
+    return result
+
+
+def _save_lyrics(table, original, payload):
+    backup = Path(str(table) + ".before-lyrics-" + uuid.uuid4().hex[:12] + ".bak")
+    backup.write_bytes(original)
+    temporary = Path(str(table) + ".lyrics-tmp")
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, table)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return backup.name
+
+
+def apply_lyrics(table, workdir, token, selected):
+    if not isinstance(token, str) or len(token) != 12 or any(c not in "0123456789abcdef" for c in token):
+        raise ValueError("歌词预览无效，请重新识别。")
+    plan_file = Path(workdir) / ("lyrics_" + token) / "preview.json"
+    if not plan_file.is_file():
+        raise ValueError("歌词预览已失效，请重新识别。")
+    plan = json.loads(plan_file.read_bytes())
+    table = Path(table)
+    original = table.read_bytes()
+    if plan["table"] != str(table.resolve()) or plan["revision"] != hashlib.sha256(original).hexdigest():
+        raise ValueError("曲谱数据已改变，请重新识别后再应用，未修改歌词。")
+    valid = {c["id"] for c in plan["changes"]}
+    if (not isinstance(selected, list) or not selected
+            or any(type(i) is not int or i not in valid for i in selected)
+            or len(set(selected)) != len(selected)):
+        raise ValueError("请选择有效的歌词修改。")
+    payload = json.loads(original)
+    for change in plan["changes"]:
+        if change["id"] not in selected:
+            continue
+        note = payload["lines"][change["line_pos"]]["notes"][change["note_pos"]]
+        if change["after"]:
+            note[change["field"]] = change["after"]
+        else:
+            note.pop(change["field"], None)
+    backup = _save_lyrics(table, original, payload)
+    return {"changed": len(selected), "backup": backup}
+
+
+def reread_lyrics(table, workdir):
+    """读取原图运行本地 OCR，生成匹配可靠的歌词差异预览，不写入现有 JSON。"""
+    import contextlib
+    import io
+    import jianpu_api
+    from jianpu2letter import review_io
+
+    table = Path(table)
+    payload = json.loads(table.read_bytes())
+    source = Path(payload.get("source") or "")
+    if not source.is_file():
+        raise ValueError("原谱图片不存在，请恢复 JSON 的 source 指向的图片。")
+    # OCR 同时定位音符以对齐歌词；这些重新识别的音符不会覆盖人工编辑结果。
+    with contextlib.redirect_stdout(io.StringIO()):
+        measures = jianpu_api.ocr_jianpu.ocr_to_stream(
+            str(source), debug_dir=None, measure_mode="vline", header_ocr=False)
+    scale = float(jianpu_api.ocr_jianpu._LAST_SCALE or 1)
+    work = Path(workdir) / ("lyrics_" + uuid.uuid4().hex[:12])
+    work.mkdir(parents=True)
+    review = work / "reread_review.json"
+    review_io.save_review(str(review), measures, payload.get("title", ""),
+                          payload.get("key", "1=C"), payload.get("meter", "4/4"),
+                          source_image=str(source))
+    donor = json.loads(review.read_bytes())
+    # 识别尺度变化时，将新坐标换算到当前 JSON 的 box 坐标系。
+    factor = float(payload.get("scale") or 1) / scale
+    for line in donor["lines"]:
+        for note in line["notes"]:
+            note["source_x"] *= factor
+    review.write_text(json.dumps(donor, ensure_ascii=False, indent=2), encoding="utf-8")
+    result = sync_lyrics(table, review, preview=True)
+    (work / "preview.json").write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    result["token"] = work.name.removeprefix("lyrics_")
+    return result

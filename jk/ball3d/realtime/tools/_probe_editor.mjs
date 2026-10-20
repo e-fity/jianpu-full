@@ -1,0 +1,12 @@
+import { chromium } from "playwright-core";
+const browser = await chromium.launch({ channel: "msedge", headless: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+page.on("console", (m) => console.log("CONSOLE", m.type(), m.text().slice(0, 300)));
+page.on("pageerror", (e) => console.log("PAGEERROR", e.message.slice(0, 600)));
+page.on("response", (r) => { if (r.status() >= 400) console.log("HTTP", r.status(), r.url()); });
+await page.goto("http://127.0.0.1:8011/editor?base=1", { waitUntil: "domcontentloaded" });
+await page.waitForTimeout(12000);
+console.log("boot:", await page.textContent("#boot"));
+console.log("msg:", await page.textContent("#message").catch(() => "n/a"));
+console.log("state:", await page.evaluate("window.__editor ? Object.keys(window.__editor.state) && window.__editor.state.solve : 'no __editor'"));
+await browser.close();

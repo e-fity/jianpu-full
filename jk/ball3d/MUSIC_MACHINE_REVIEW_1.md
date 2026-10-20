@@ -1,0 +1,24 @@
+# Codex independent review — changes required before visual acceptance
+
+The initial asset build ran successfully with Blender 4.5.3. The GLB/blend and five PNGs exist. No need to claim all Blender execution is pending now; reviewer ran it.
+
+Independent probe: `D:/node/node.exe ball3d/out/music_machine_v2/audit_layout.mjs` (from workspace root). Current real song: max group 14, max board |X| 4.68, multiple sphere/board intersections. This cannot pass portrait render acceptance.
+
+1. `groupLandings`: `current.length` is undefined; use actual members count. Add a dense-note regression that fails on over-wide groups. Validate visible width with actual camera and mesh bounds, including start pad and troughs.
+2. Start pad directly above board 0 causes the ball to fall through its departing pad. Other row transitions intersect boards too. Motion must clear the source and every nearby board. Use an independent sphere/OBB probe on real score and varied fixtures; fix geometry/path rather than weakening tests.
+3. Channel entry/exit currently bounce at the SAME coordinate because `channelCenter(seg,0)===seg.p0` and `channelCenter(seg,1)===seg.p1`. Actual trough spans onto the boards. Separate free entry/exit endpoints from contacts. Inspect actual triangle surfaces and nearby board/arm intersections. `channelNormal` sign flipping whenever dx changes can create a discontinuous twisted trough; use a continuous consistent normal, and safe control points/clearance. Reject unsafe channel candidates with an audited fallback instead of rendering intersections.
+4. Requirements say use beat duration AND available seconds; current long-note rule only uses seconds, and excludes long notes within groups without proactively separating them. Add beat-aware decisions, record unrounded values for boundary validation, and use sustainable music-driven groups so eligible long notes can actually produce transitions. Do not create fixed periodic channels.
+5. Preserve uninterrupted bounce/fall motion rather than restoring the old frozen hold on every short note. Small contact dwell is fine but half every short note is visually robotic. Long time budgets can use a chute; rests must stay silent.
+6. Current Blender previews: metal arm disappears into black background, coloured preview removes wood texture entirely, outer colours cropped, only central arm shown. Use neutral lit background, frame all assemblies, retain shared wood texture tinted per board, show actual before/after appearance without clipping highlights. Improve grain away from uniform diagonal stripes. Add a visible small mount/joint where board meets arm if simple. Do not claim a colour/material near-view passed yet.
+7. Check GLB geometry world transforms, coordinate axes, and dimensions, not just mesh names. Loader must actually use GLB in exported render; static route and async builder should be verified.
+8. Scene pool coverage must use real spatial bounds (uneven rows) rather than assuming the old 12 notes per side always cover view. Protect end-of-song wall coverage. Remove any obsolete variables/imports introduced by this task, but do not touch unrelated existing code.
+
+Keep the requested scope, revise tests to catch real errors, and report remaining limitations honestly. Codex will execute scripts and render again. User visual approval remains pending.
+
+Actual runtime evidence: `out/music_machine_v2/draft.mp4` rendered the mixed fixture, 366 frames, loaded GLB successfully. `draft_contact.jpg` shows excessive row width, multiple washed-out near-white lit planks, and a visible lower wall edge. Thus geometry/asset transport works, but those appearance/coverage problems need fixes. Emissive should be modulated by the wood texture and preserve hue, with lower intensity/shorter decay as needed. Merely asserting per-instance attribute independence is insufficient.
+
+`node --test realtime/tests/layout.test.mjs` failed the actual sphere/board test: channel segment at u=0.15 penetrates board 4 (d2=0.004035...). Fix the geometry, keep meaningful collision coverage.
+
+Restore the old `wood-drop` CLI choice alongside `classic` and new `music-machine` so existing user commands and comparison runs still work. New default can be music-machine. Remove any test/README stale assumptions created by new default, while preserving old tests that verify classic motion.
+
+Preview HTML embeds arbitrary song JSON directly inside a script; escape `<` as `\u003c` (and safe separators as appropriate) so song titles/lyrics containing `</script>` cannot break the page or run script. The Python preview CLI must reject output aliases to input and non-HTML suffixes before writing. New deletion logic should only remove its verified unique work directory. These are concrete input edgecases, not an invitation to build generic security infrastructure.

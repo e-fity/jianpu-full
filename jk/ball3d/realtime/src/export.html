@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ball3d realtime export</title>
+<style>
+  /* The canvas is the encoder's only input: no scaling, no interpolation,
+     no border. Everything else on the page is off-canvas. */
+  html, body { margin: 0; padding: 0; background: #101418; color: #c8ccd2;
+               font: 13px/1.4 ui-monospace, Consolas, monospace; }
+  #view { display: block; }
+  #status { position: fixed; left: 8px; bottom: 6px; opacity: .75; }
+</style>
+</head>
+<body>
+<!-- width/height are set from the config by export.mjs, so the encoded frame
+     size is exactly what the CLI asked for -->
+<canvas id="view"></canvas>
+<div id="status">starting…</div>
+<script type="module" src="./export.bundle.js"></script>
+</body>
+</html>

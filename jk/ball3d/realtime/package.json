@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "canvas-record": "6.0.0",
+    "esbuild": "0.28.2",
+    "playwright-core": "1.64.0",
+    "three": "0.186.1"
+  }
+}
