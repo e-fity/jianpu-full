@@ -101,6 +101,7 @@ def save_review(path, measures, title, key_mark, meter, source_image=""):
         "format": FORMAT,
         "metadata": {
             "title": title,
+            "header_text": measures[0].get("header_text", []) if measures else [],
             "key": key_mark,
             "meter": meter,
             "source_image": os.path.abspath(source_image) if source_image else "",
@@ -264,4 +265,5 @@ def load_review(path):
 
     if not measures:
         raise ValueError("审核 JSON 没有可生成的音符")
+    measures[0]["header_text"] = metadata.get("header_text") or []
     return {"title": title, "key": key_mark, "meter": meter}, measures

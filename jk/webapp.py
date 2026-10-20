@@ -11,6 +11,7 @@
 
 import argparse
 import glob
+from functools import wraps
 import json
 import os
 import re
@@ -24,6 +25,8 @@ import uuid
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
 import jianpu_api
+import note_review
+import lyric_sync
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, "web")
@@ -39,6 +42,15 @@ app = Flask(__name__)
 # 所以并发的识别请求必须排队。Flask 仍然 threaded=True —— 那样识别跑着的时候，
 # 页面照样能取图和下载，不会整站卡住。
 _RUN_LOCK = threading.Lock()
+_EDIT_LOCK = threading.Lock()
+
+
+def _serialize_edits(func):
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        with _EDIT_LOCK:
+            return func(*args, **kwargs)
+    return wrapped
 
 
 def _fail(message, status=400):
@@ -94,6 +106,7 @@ def _safe_stem(filename):
 
 
 @app.post("/api/convert")
+@_serialize_edits
 def convert():
     upload = request.files.get("image")
     if upload is None or not upload.filename:
@@ -182,6 +195,7 @@ def convert():
 
 
 @app.post("/api/meta")
+@_serialize_edits
 def api_meta():
     """改曲名 / 调号 / 拍号 / 拍速 —— **只改这 4 个字段，不重跑 OCR**。
 
@@ -219,6 +233,37 @@ def api_meta():
         json.dump(payload, fp, ensure_ascii=False, indent=2)
         fp.write("\n")
     return jsonify({"ok": True, "song": _song_index()[base]})
+
+
+@app.get("/review/<base>")
+def review_page(base):
+    if base not in _song_index():
+        return "曲库里没有这一首。", 404
+    return send_from_directory(WEB, "review.html")
+
+
+@app.route("/api/review/<base>", methods=["GET", "POST"])
+@_serialize_edits
+def api_review(base):
+    if base not in _song_index():
+        return _fail("曲库里没有这一首。", 404)
+    table = os.path.join(LIB, base + NOTES_SUFFIX)
+    overlay = os.path.join(LIB, base + "_overlay.png")
+    try:
+        if request.method == "POST":
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                return _fail("请求必须是 JSON 对象。")
+            result = note_review.edit_note(table, overlay, data)
+        else:
+            result = note_review.read_review(table, overlay)
+    except ValueError as exc:
+        return _fail(str(exc))
+    except OSError as exc:
+        return _fail(f"读写曲谱失败：{exc}", 500)
+    resp = jsonify({"ok": True, **result})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.get("/files/<rid>/<name>")
@@ -261,6 +306,22 @@ def _song_index():
             "notes_url": f"/library/notes/{base}",
         }
     return songs
+
+
+@app.post("/api/lyrics/sync/<base>")
+@_serialize_edits
+def api_sync_lyrics(base):
+    if base not in _song_index():
+        return _fail("曲库里没有这一首。", 404)
+    try:
+        result = lyric_sync.sync_lyrics(
+            os.path.join(LIB, base + NOTES_SUFFIX),
+            os.path.join(jianpu_api.PIANO11, "out", base + "_review.json"))
+    except ValueError as exc:
+        return _fail(str(exc))
+    except OSError as exc:
+        return _fail(f"歌词同步读写失败：{exc}", 500)
+    return jsonify({"ok": True, **result})
 
 
 @app.get("/library")

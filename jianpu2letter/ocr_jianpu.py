@@ -10,7 +10,6 @@
 4. 用本图模板补全 OCR 漏掉的数字；无法可靠判断时保留 ?，不瞎猜。
 5. 音区点、减时线、附点、延时线、小节线由几何位置识别。
 
-正常运行只输出一行摘要；传入 --ocr-debug-dir 时才保存/打印详细诊断信息。
 """
 
 import os
@@ -20,7 +19,6 @@ from collections import defaultdict
 import cv2
 import numpy as np
 
-SCALE = 2
 TARGET_DIGIT_PX = 48      # 处理前把「数字高度」归一到这个像素数（小字号的救命设置）
 # 逐行/逐音诊断（调参用）。默认**关**：全量跑 19 张时日志会到几百 KB，也很难读。
 # 要排查时用环境变量打开（不用改代码）：
@@ -37,6 +35,14 @@ ENABLE_LABEL_SWAP = True    # 标签互换（2-opt）：开关（用户 2026-09-
 # 分数会很高、标不出来。这套只擅长抓"本来就勉强过线"的音。
 CONF_WARN = 0.70         # 低于此值的音，输出图里加黄底
 DISAGREE_CONF = 0.30     # 形状判据另有结论、且与最终值矛盾时，压到这个值
+# 【实验开关，默认关】"本字体数字模型说了算"：模型补入的值**不许被后面的复核覆盖**。
+# 为什么需要它：模型（digit_model.npz）排在前，而 0/6 复核、假休止复核、字形聚类、0 撤销、
+# 5/6 复核 都在它后面且能改它的答案。7.png 实测就吃了这个亏 —— 模型对 4 个 6 答对了、
+# 却被 `5/6 复核` 按"孔比<0.05 → 必是 5"改回 5（那 4 个 6 的内孔在 10px 下二值化时没了，
+# 孔比塌成 0）。本开关把这批答案在最后统一还原，用于"纯模型 vs 模型+复查"的对比实验。
+# ⚠ 只在**模型认识的字体**上有意义；未标注的谱上模型没有模板，别默认开。
+MODEL_AUTHORITY = os.environ.get("JIANPU_MODEL_AUTHORITY", "").strip().lower() not in (
+    "", "0", "false", "no")
 # 一条**真**延时线 `-` 的墨宽约 0.85H（基准来自上海滩日志：墨宽 1.7H → 2 条）。
 # 原来的噪声门槛只有 0.25H，结果把 0.3H 左右的碎片（附点、数字笔画残迹等）
 # 也当成了 `-` ——《南泥湾》几乎每个音都多出 1 条假 `-` 就是它。
@@ -214,6 +220,15 @@ PAREN_STEM_MIN_RATIO = 0.85
 # 12 张全扫：真括号 |dy| 最大 0.19H（7.png），假货最小 1.90H → 取 0.55，两侧各留约 3 倍。
 # 与数字候选的 `abs(cy - baseline_y) > 0.55 * H` 是同一个口径。
 PAREN_MAX_DY_RATIO = 0.55
+# ⚠ 2026-10-14 实测记录（**别再照这个方向调**）：50.jpg（10px 级小谱）的两个括号
+# `(`=0.88H/填充0.60、`)`=1.02H/0.48 被本函数的「填充<0.45」硬闸挡掉，于是几何半票为空、
+# OCR 读到的括号按"双确认"规则丢弃。试过把填充上限放宽到 0.65、高度下限放到 0.85H
+# —— **括号一个没救回来**（它们仍卡在竖笔判据 `PAREN_STEM_MIN_RATIO`：实测 0.95/0.86
+# 落在真 `1` 的 0.87~1.00 区间里，这个字号下两者没有余量），**却把真数字当"括号形状"
+# 剔出数字候选**：45.jpg L03 25 音→20 音、L07 20→19、L12 11→9，44.jpg L06 16→14。
+# 故回退。要治这类谱，方向是"OCR 已确认括号时让形状分类器翻掉竖笔判据"
+# （分类器给这两个括号 0.54/0.53、给真 `1` 是 0.80~0.92），而不是放宽这里的尺寸门槛。
+# 2026-10-15 用户决定：该方向也先不做（方案 B′ 试过、已回退）。
 # 「谱表左边界」：行首若有**贯穿整个谱表的左括线**，则它左侧的页边内容（声部名等）不成音。
 # 为什么需要（用户 2026-09-22 报 21_overlay.png：字母盖住了"男/女/低"，而部分数字又丢了）：
 # 那份谱的声部名汉字尺寸与数字**几乎一样**（实测 h/H0 = 1.10~1.19、宽高比 0.96~1.00、
@@ -231,7 +246,6 @@ LEFTMOST_BAR_MIN_H = 3.0     # 竖条最低高度（字高倍数）：高于小�
 LEFTMOST_BAR_MAX_W = 1.0     # 竖条最大宽度（字高倍数，实测括线 0.94H）
 LEFTMOST_BAR_MAX_X = 0.25    # 竖条必须落在页面宽度左侧的这部分内（防误取页中的长竖条）
 # 注意：字形聚类是全图一起做的，**增删任意候选块都会改变其他块的标签**。
-# 5.png 出现 5→1（只有这一张），而"倚音行剔除"已排除，故用本开关做对照实验。
 LAST_ROW_INFO = []         # 最近一次识别的「每行数字块」（供 train_digits.py 采集样本）
 _LAST_BINARY = None        # 最近一次识别的二值图（同上）
 _LAST_COLOR = None         # 最近一次识别的**缩放后彩色图**（供原位盖字母用）
@@ -837,7 +851,7 @@ def _detect_repeats_geom(row_components, H):
 
 
 def _row_has_end_bar(row, components, H):
-    """这一行是不是**以终止双小节线 `‖` 收尾**（供"末行放宽"判断谱子是否已结束）。
+    """检查本行是否以双小节线 `‖` 或反复结束符 `:‖` 收尾，供短行放宽使用。
 
     直接用现成的 `_detect_repeats_geom()`：它把"相邻两条细竖线、两侧都没有点"判成
     `double`。实测 19.png 末行返回 `[(869.5, 'double')]`、倒数第二行返回 `[]`。
@@ -845,7 +859,7 @@ def _row_has_end_bar(row, components, H):
     ⚠ 光有 `double` **不够**：`‖` 也可能是**行中间的记号**而不是曲终。19.png 实测
     第 14 行在 x=1923 有一对竖线、下面印着 `D.S.`（返回记号），后面还有整整一小节
     的谱 —— 那时若认作"结束"，末行的放宽就永远不会生效（第一版就是这么失效的）。
-    故附加一条：`‖` 必须落在**本行最后一个数字块之后**（行尾），才是真曲终。
+    因此闭合记号必须落在**本行最后一个数字块之后**；这不表示可以停止扫描后续行。
 
     行带取本行块的上下各 1.0H —— `‖` 的两条竖线比数字高（实测 2.1H），必然落在带内。
     """
@@ -855,7 +869,7 @@ def _row_has_end_bar(row, components, H):
     right = max(b["x"] + b["w"] for b in blocks)
     band = [c for c in components
             if c["y"] < y1 + 1.0 * H and c["y"] + c["h"] > y0 - 1.0 * H]
-    return any(kind == "double" and x >= right - 0.5 * H
+    return any(kind in ("double", "backward") and x >= right - 0.5 * H
                for x, kind in _detect_repeats_geom(band, H))
 
 
@@ -1812,8 +1826,22 @@ ROW_OVERSIZE_MAX = 1.90
 #   ——那 2 个"1 个"的也只是个横跨图宽 **1~4%** 的碎片。而 39 的那条歌词行有 **15 个**。
 # 故取 `>= 2`：**零误伤**（被接受行里一个都没有），却能拦住歌词行。
 ROW_HANZI_MIN = 2
-# ⚠ 这两条对**末行**要放宽：谱子没结束（还没见到 `‖`）时，后面的行必须还是旋律行，
-#    哪怕它又矮又短。放宽逻辑在 `_rows_from_blocks()` 的"末行放宽"那段。
+# 「认出来的数字够多就不整行丢」（2026-10-15 用户方案，实测依据如下）。
+# 起因：52.jpg《追光者》末行（转1=C / 结束句）**OCR 已读到 18 个数字、形状分 0.77
+# （全谱最高档）**，只因为行带里混进「转1=C」「结束句」两个汉字块，就被 `text_count`
+# 当"纯文字行"丢掉 —— 一行 30 多个音全没了。
+# 为什么两个条件都要：只看数字个数会把**页脚**也救回来（QQ 号/网址里有数字）；
+# 实测 15 张里所有"该救"和"不该救"的行靠形状分分得很开：
+#   该救（真旋律行）  数字=18  形状分 **0.77**
+#   不该救（页脚/小字行）数字 8~19  形状分 **0.45~0.61**
+# 空档 0.61 → 0.77，故取 0.70。数字门槛 7 是用户定的（比它少的行没实测样本）。
+ROW_KEEP_MIN_DIGITS = 7
+ROW_KEEP_MIN_SHAPE = 0.70
+# 还有一条：**这一行必须横跨大部分页宽**（复用 `ROW_MIN_SPAN` 那条门槛）。
+# 实测（2026-10-15）：靠前两条会误救 2 行 ——
+#   16.jpg 块=2  跨度=0.03（一个两块的碎片簇）、20.png 块=15 跨度=0.21（页脚「交流QQ 534634458」）；
+#   而真行是 52.jpg 跨度=0.77、38.png 跨度=0.76。跨度把两者分得干干净净。
+# 行尾有 `‖` 或 `:‖` 的短行可放宽跨度/间距判据；其余判据仍检查，也继续扫描后续行。
 # 假休止复核（判成 0 的音里挑出"被误判成休止的数字"）—— 判据两步走，见调用处的长注释：
 #   ① **孔比可疑**：本块孔比 < `FAKE_REST_HOLE_FACTOR` ×（本图**其它** 0 块的孔比最小值）。
 #      `0` 必须有明显的封闭内孔，孔比离群地小就不是 `0`。基准取**本图自己的最小值**、
@@ -1843,6 +1871,21 @@ _LYRIC_PUNCT = "，。、；：？！,.;:?!…~～·—－-（）()【】[]《�
 # 实测 14.jpg 行2 那个 `2̇`：块高 51（同图正常数字 43）、与参照 2 的相关仅 0.48；
 # 剪掉底部一截再认就对上了。**只在原块判不出时**才试剪，免得把正常数字削成别的。
 SUB_MERGE_TRIM_FRACS = (0.15, 0.25)
+# 「字形被二值化切断」的补救（2026-10-15，用户要求做；与上面那条**方向相反**）：
+# 低分辨率扫描件的粗体字形会**断成两块**。实测 51.png L07N020（《万里长城永不倒》行7）：
+# `5` 的顶横（30×14 = 0.30H）与主体（39×35 = 0.76H）只差 1px 不相连 → 主体太矮/太方
+# （宽高比 1.11，正常 5 是 0.88）谁都认不出（模型 1-NN 最好只有 `0` 0.522 / `4` 0.506、
+# 间隔 0.016 < 门槛），顶横又进不了数字候选（< 0.65H）→ 整块留 `?`。
+# 做法（同样**只在原块判不出、且块明显偏矮 < 0.85H 时**才试）：
+#   ① 取块上下各 `MERGE_GROW_H` 的窄条，**纵向膨胀** `MERGE_DILATE_H`（只为把断片连起来，
+#      膨胀量决定"最多隔多远还算同一字"：≈0.08H，够桥接 1~4px 的断缝，够不到 0.3H 外的音区点）；
+#   ② 取原块中心所在的那个连通域的外框，**用原始墨迹**（不是膨胀后的）重新分类；
+#   ③ 拼接后高度必须落在 `MERGE_MIN_H`~`MERGE_MAX_H`（正常数字区间）内 —— 这条同时挡住
+#      "把数字和下方减时线拼成一个大块"（那会超过 1.35H，那条由上面的 trim 负责）。
+MERGE_GROW_H = 0.45
+MERGE_DILATE_H = 0.08
+MERGE_MIN_H = 0.85
+MERGE_MAX_H = 1.35
 # 括号候选：若它"很像某个数字"（分类器给出数字且分 ≥ 此值）就不是括号。
 # 依据：细高的 `1` 与 `(` 在尺寸/填充上几乎一样（17.jpg 实测把整张谱的 `1` 都判成了括号，
 # 每行留 3~16 个假括号），但 `1` 会很像 `1`（≥0.8），真括号则谁都不像。
@@ -1893,6 +1936,29 @@ def _row_hanzi_count(components, cy, H0):
     return count
 
 
+
+def _row_music_right_bound(row, components, H, text_tokens):
+    """用闭合双线和右侧同排文字分离页脚，避免 QQ 号码混入音符行。"""
+    blocks = row["blocks"]
+    y0 = min(b["y"] for b in blocks)
+    y1 = max(b["y"] + b["h"] for b in blocks)
+    band = [c for c in components
+            if c["y"] < y1 + H and c["y"] + c["h"] > y0 - H]
+    for x, kind in _detect_repeats_geom(band, H):
+        if kind not in ("double", "backward"):
+            continue
+        trailing = [b for b in blocks if b["x"] > x]
+        if not trailing or sum(b["x"] + b["w"] < x for b in blocks) < 3:
+            continue
+        # 必须先遇到独立文字块；双线后还有旋律数字时不可截断（如 D.S.）。
+        if any(t["x0"] > x + 2 * H
+               and abs(t["cy"] - row["cy"]) <= 0.8 * H
+               and min(b["x"] for b in trailing) >= t["x0"] - 0.5 * H
+               for t in (text_tokens or [])):
+            return x + H
+    return None
+
+
 def _rows_from_blocks(components, tokens, H0, binary, text_tokens=None):
     """用「数字块按 y 聚类」定行（纯图像，不依赖 OCR），再把 OCR 文本按 y 分配给各行。
 
@@ -1939,6 +2005,14 @@ def _rows_from_blocks(components, tokens, H0, binary, text_tokens=None):
 
     out = []
     for r in rows:
+        right_bound = (_row_music_right_bound(r, components, H0, text_tokens)
+                       if out else None)
+        row_components = components
+        if right_bound is not None:
+            r["right_bound"] = right_bound
+            r["blocks"] = [b for b in r["blocks"] if b["x"] < right_bound]
+            r["cy"] = float(np.median([b["y"] + b["h"] / 2 for b in r["blocks"]]))
+            row_components = [c for c in components if c["x"] < right_bound]
         hs = [b["h"] for b in r["blocks"]]
         H = float(np.median(hs)) if hs else 0.0
         y0 = min((b["y"] for b in r["blocks"]), default=0)
@@ -1946,12 +2020,14 @@ def _rows_from_blocks(components, tokens, H0, binary, text_tokens=None):
         r["H"] = H
         r["tokens"] = [t for t in tokens
                        if y0 - 0.6 * H <= t["cy"] <= y1 + 0.6 * H
-                       and (t["y1"] - t["y0"]) <= 1.5 * H] if H > 0 else []
+                       and (t["y1"] - t["y0"]) <= 1.5 * H
+                       and (right_bound is None or t["x0"] < right_bound)] if H > 0 else []
         digit_count = sum(1 for t in r["tokens"] for v in t["slots"] if v is not None)
         # 「纯文字行」判据（歌词行 / 制谱信息行）：旋律行的本质是「含数字」，
         # 若这一行里出现 >=2 个「纯汉字、完全不含数字」的文本块，它就是文字行。
         text_count = sum(1 for t in (text_tokens or [])
-                         if y0 - 0.8 * H <= t["cy"] <= y1 + 0.8 * H)
+                         if y0 - 0.8 * H <= t["cy"] <= y1 + 0.8 * H
+                         and (right_bound is None or t["x0"] < right_bound))
         # 「含网址/拉丁文本的行」判据（用户 2026-09-21 报 17.jpg 末尾那行被当成音符行）：
         # 旋律行的 OCR 文本永远是数字 / 横线 / 括号 / 汉字歌词，**不会出现拉丁字母或 `/`**。
         # 实测那行的文本块是 `1/user.qzone.qq.com/601030387`，形状分仅 0.52（该图真行 0.78~0.86），
@@ -2002,9 +2078,9 @@ def _rows_from_blocks(components, tokens, H0, binary, text_tokens=None):
             reason = f"字高{H:.0f}≠数字字高{H0:.0f}"
         elif not shape_ok:
             reason = f"字形不像数字(匹配分{med_shape:.2f})"
-        elif _row_has_oversize(components, r["cy"], H0):
+        elif _row_has_oversize(row_components, r["cy"], H0):
             reason = "含远高于字高的块（歌词汉字）"
-        elif _row_hanzi_count(components, r["cy"], H0) >= ROW_HANZI_MIN:
+        elif _row_hanzi_count(row_components, r["cy"], H0) >= ROW_HANZI_MIN:
             reason = "行带里有一片汉字块（歌词行）"
         # 表头行两条结构判据（见 ROW_MIN_SPAN / ROW_MAX_GAP_RATIO 处的实测说明）：
         # 放在最后 —— 只有"前五条都通过"的行才需要它俩兜底，正是那 6 个假行。
@@ -2022,8 +2098,8 @@ def _rows_from_blocks(components, tokens, H0, binary, text_tokens=None):
         # 「末行放宽」（用户 2026-09-22 报"19.png 最后一行的音符被丢弃"）：
         # 谱子的末行常常又矮又短（19.png 稻香末行 `i - - - | i - 0 0 ) ‖` 只有 4 个块、
         # 只横跨 16% 图宽），会被上面两条"表头行"结构判据（跨度/块间距）当成表头丢掉。
-        # 判据：**这一行以终止记号 `‖` 收尾**（`_row_has_end_bar()`）就免掉那两条结构判据
-        # —— 见到 `‖` 就是曲终，末行必须收下；其余五条判据照旧生效（字形像数字、块高、
+        # 判据：**这一行以 `‖` 或 `:‖` 收尾**（`_row_has_end_bar()`）就免掉那两条结构判据
+        # —— 闭合记号支持保留短行；其余判据照旧生效（字形像数字、块高、
         # 块数≥3、非拉丁文本行、非纯文字行），所以末尾的制谱信息行/水印仍被挡住。
         # ⚠ 为什么要求"本行带 ‖"，而不是"只要还没见过 ‖ 就一路放宽"（用户原话的字面版）：
         #   21.jpg 实测就会翻车 —— 它第 3 行有个 4 块、只横跨 8% 图宽、形状分仅 0.59 的
@@ -2037,8 +2113,16 @@ def _rows_from_blocks(components, tokens, H0, binary, text_tokens=None):
                 and _row_has_end_bar(r, components, H)):
             tail_relaxed = True
             reason = ""
+        # 「认出来的数字够多就不整行丢」（判据与实测见 ROW_KEEP_MIN_DIGITS）
+        kept_by_digits = False
+        if reason and digit_count >= ROW_KEEP_MIN_DIGITS and med_shape >= ROW_KEEP_MIN_SHAPE:
+            _span = ((xs_sorted[-1] - xs_sorted[0]) / binary.shape[1]) if xs_sorted else 0.0
+            if _span >= ROW_MIN_SPAN:      # 必须横跨大部分页宽（实测值见 ROW_KEEP_MIN_DIGITS）
+                kept_by_digits = True
+                reason = ""
         if VERBOSE_DEBUG:
-            verdict = ("→ 保留" + ("（末行放宽：本行以 ‖ 收尾）" if tail_relaxed else "")
+            verdict = ("→ 保留" + ("（末行放宽：本行以 ‖ 或 :‖ 收尾）" if tail_relaxed else "")
+                       + ("（数字够多+形状够像：不丢）" if kept_by_digits else "")
                        if not reason else "→ 跳过：" + reason)
             print(f"  [imgrow] y≈{r['cy']:.0f} 块={len(r['blocks'])} H={H:.0f} "
                   f"文本块={len(r['tokens'])} 数字={digit_count} "
@@ -2163,9 +2247,8 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
         _LAST_TITLE = _detect_title(engine, color0)
     else:
         _LAST_KEY_MARK = _LAST_TITLE = None
-    # 多尺度 OCR：同时在 2 倍图与 1 倍原图上各跑一遍。
     # 小图/细字时 OCR 的文字检测器会漏掉大半（曾出现 1200x574 的谱只读出 4 个
-    # 文本块），两个尺度互补能显著提高召回。1 倍结果的坐标乘 SCALE 对齐到 2 倍。
+    # 文本块），两个尺度互补能显著提高召回。
     raw_items = []
     for arr, sc in ((color, 1.0), (color0, scale)):
         try:
@@ -2365,6 +2448,8 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
         # 数字主体与 OCR 中线接近；收紧长宽比，排除括号、竖线与汉字碎块。
         candidates = []
         for c in all_components:
+            if row.get("right_bound") is not None and c["x"] >= row["right_bound"]:
+                continue
             cy = c["y"] + c["h"] / 2
             ar = c["w"] / max(c["h"], 1)
             # 「数字 + 上方粘连高音点」：又高又窄 → 尝试拆分
@@ -2552,6 +2637,9 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
                 if digit is not None:
                     record["values"][i] = digit
                     record["seed_flags"][i] = True
+                    block["_from_model"] = True     # 供「5/6 复核」让路（见那里）
+                    if MODEL_AUTHORITY:
+                        block["_model_value"] = digit     # 供末尾还原（见 MODEL_AUTHORITY）
                     model_filled += 1
         print(f"[ocr] 本字体模型补入 {model_filled} 个数字")
 
@@ -2609,6 +2697,61 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
                     break
     if trim_filled:
         print(f"[ocr] 底部粘线的块剪掉后补入 {trim_filled} 个数字")
+
+    # 「字形被二值化切断」的补救（见 `MERGE_GROW_H` 处的实测说明）：同样只兜"仍然没定值"的块，
+    # 且只试**明显偏矮**的（< `MERGE_MIN_H`）—— 正常数字（≈1.0H）根本不会进来。
+    merge_filled = 0
+    img_h = binary.shape[0]
+    for record in row_records:
+        H = record["H"]
+        for i, (block, value) in enumerate(zip(record["blocks"], record["values"])):
+            if value is not None or block["h"] >= MERGE_MIN_H * H:
+                continue
+            bx, by, bw, bh = block["x"], block["y"], block["w"], block["h"]
+            pad_y, pad_x = int(MERGE_GROW_H * H), int(0.12 * H)
+            ry0, ry1 = max(0, by - pad_y), min(img_h, by + bh + pad_y)
+            rx0, rx1 = max(0, bx - pad_x), min(binary.shape[1], bx + bw + pad_x)
+            strip = binary[ry0:ry1, rx0:rx1]
+            if strip.size == 0:
+                continue
+            kern = max(1, int(MERGE_DILATE_H * H)) * 2 + 1
+            _ln, labels = cv2.connectedComponents(
+                cv2.dilate(strip, np.ones((kern, 1), np.uint8)), connectivity=8)
+            # ⚠ **不能取"块的正中心像素"**判归属：数字 bbox 的正中常常是空白（`5` 的碗里就是白的），
+            #   实测 51.png 那块取中心拿到 `0`（背景）→ 整条补救被跳过。改取"与原块重叠墨最多"的连通域。
+            sub = labels[by - ry0:by - ry0 + bh, bx - rx0:bx - rx0 + bw]
+            vals, cnts = np.unique(sub[sub > 0], return_counts=True)
+            if not len(vals):
+                continue
+            keep = int(vals[cnts.argmax()])
+            if keep == 0:
+                continue
+            ys, xs = np.where(labels == keep)
+            ny0, ny1 = ry0 + int(ys.min()), ry0 + int(ys.max()) + 1
+            nx0, nx1 = rx0 + int(xs.min()), rx0 + int(xs.max()) + 1
+            mh = ny1 - ny0
+            if mh <= bh or not (MERGE_MIN_H * H <= mh <= MERGE_MAX_H * H):
+                continue
+            # ⚠ **只许和被丢掉的碎片拼**：合并框里不许压着**别的音符块**。否则会把 `#`/`\` 这类
+            #   记号跟旁边的数字拼成一个"完整数字"—— 实测 7.png 三处（L03N020/L03N021/L04N002，
+            #   人工真值都是 `skip`）就这么被拼成了假 `3`（`#`碎片 + 旁边真 `3`）。
+            if any(other is not block and other["x"] < nx1 and nx0 < other["x"] + other["w"]
+                   and other["y"] < ny1 and ny0 < other["y"] + other["h"]
+                   for other in record["blocks"]):
+                continue
+            merged = dict(block, x=nx0, y=ny0, w=nx1 - nx0, h=mh,
+                          area=int((binary[ny0:ny1, nx0:nx1] > 0).sum()))
+            d2 = _classify_by_reference(merged, binary, refs, min_score=0.55, min_margin=0.03)
+            if d2 is None and model:
+                d2 = _classify_by_model(merged, binary, model)
+            if d2 is not None:
+                record["values"][i] = d2
+                merge_filled += 1
+                if VERBOSE_DEBUG:
+                    print(f"  [merge] x={bx:.0f} 块高{bh:.0f}（行字高{H:.0f}）判不出"
+                          f"，纵向拼接后高{mh} → {d2}")
+    if merge_filled:
+        print(f"[ocr] 纵向拼接后补入 {merge_filled} 个数字")
 
     # 0 / 6 定向复核（只碰这一对）：用「上下质量分布 + 内孔位置」双判据，
     # 两者一致时才改判，否则保持原值。0 与 6 都是闭合圈，需专门区分。
@@ -2824,6 +2967,14 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
                 # 而本规则把同一条证据读成"没有内孔 → 是 5" —— 同源反判，本规则让路。
                 # 实测（51.png 那块）：形状 `0`(0.677)/`6`(0.674)、`5` 不在前三 → 确是 `6`。
                 continue
+            if block.get("_from_model"):
+                # 本字体数字模型认出来的：让路。它比"孔比 < 0.05"这条几何证据强 ——
+                # 小字号的 6 内孔会在二值化时消失（7.png 实测：88 个真 6 里 4 个孔比塌成 0，
+                # 该图 6 处错里 4 处就是这么来的；48.jpg 也有 1 处）。模型已经按
+                # min_score 0.75 / min_margin 0.04 过了闸，不是瞎猜。
+                # 实测（用户 2026-10-12 批准）：开豁免后全库 53 张只多出 5 处改动，
+                # 逐处回原谱核对**全是真 6**（7.png 4 处 + 48.jpg 1 处），0 处改坏。
+                continue
             _hv, hole = _hole_class(block, binary, return_detail=True)
             ratio = (hole or {}).get("ratio")
             if ratio is None or ratio >= HOLE_FIVE_MAX_RATIO:
@@ -2835,6 +2986,22 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
                       f"（毫无封闭内孔）→ 改判 5")
     if five_six_fixed:
         print(f"[ocr] 5/6 复核：{five_six_fixed} 个块由 6 改判为 5（无内孔）")
+
+    # 【实验开关 MODEL_AUTHORITY】把模型补入的答案还原回来 —— 上面这些复核（0/6、
+    # 假休止、聚类、0 撤销、5/6）都排在模型之后、都能改它。放在**所有改值的步骤之后**，
+    # 顺带刷新 `_is_digit`（0 撤销可能把值改成过 None）。默认关，正常跑一字不变。
+    if MODEL_AUTHORITY:
+        restored = 0
+        for record in row_records:
+            for i, block in enumerate(record["blocks"]):
+                want = block.get("_model_value")
+                if want is not None and record["values"][i] != want:
+                    record["values"][i] = want
+                    restored += 1
+            for block, value in zip(record["blocks"], record["values"]):
+                block["_is_digit"] = value is not None
+        if restored:
+            print(f"[ocr] 模型权威：还原 {restored} 个被后置复核改掉的块（模型答案）")
 
     # 逐音置信度：**必须在所有判定都做完之后算**——上面每一处
     # `record["values"][i] = ...`（内孔补入 / 本字体模型 / 标准字形 / 聚类改判 /
@@ -2906,7 +3073,9 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
         tokens_in_row = [t for t in record["source"]["tokens"]
                          if (t["y1"] - t["y0"]) <= 1.5 * H]
         tokens_in_row.sort(key=lambda t: t["x0"])
-        row_components = [c for c in all_components if c["y"] < py1 and c["y"] + c["h"] > py0]
+        row_components = [c for c in all_components if c["y"] < py1 and c["y"] + c["h"] > py0
+                          and (record["source"].get("right_bound") is None
+                               or c["x"] < record["source"]["right_bound"])]
 
         # 用中位数而非 min/max，避免个别离群块把「贯穿全行」的门槛变得苛刻
         tops = sorted(b["y"] for b in blocks)
@@ -3073,7 +3242,7 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
         # 第 1 段仍写 `lyric`（下游全部沿用、零改动），第 2/3 段写 `lyric2` / `lyric3`。
         # ⚠ 谱面上每段开头的段号（`1.` `2.`）**不特殊处理**（用户 2026-09-29 选定）——
         #   它会作为普通汉字混进那一段的歌词串里。
-        if text_tokens and notes:
+        if notes:
             row_bottom = max(b["y"] + b["h"] for b in blocks)
             # 窗口下界取「**下一行数字的顶部**」（歌词不会长到下一行里去），末行兜底 8 个字高。
             # ⚠ 不能沿用固定的"3.5 倍字高"：实测**段间距 ≈2.1H、行间距只有 ≈5.7H** ——
@@ -3088,12 +3257,25 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
             limit = min(row_bottom + 8 * H, _nxt_top - 0.3 * H)
             cand = [t for t in text_tokens
                     if row_bottom <= t["cy"] <= limit]
-            verses = []
-            for tk in sorted(cand, key=lambda t: t["cy"]):
-                if verses and tk["cy"] - verses[-1][-1]["cy"] <= 0.6 * H:
-                    verses[-1].append(tk)
-                else:
-                    verses.append([tk])
+            from .lyric_ocr import read_cells, lyric_bands, group_tokens, positioned_characters
+            lyric_binary = binary
+            if record["source"].get("right_bound") is not None:
+                # 页脚已分离的短行，歌词投影也只看音符覆盖的区域。
+                lyric_right = min(record["source"]["right_bound"],
+                                  max(n["cx"] for n in notes) + H)
+                lyric_binary = binary[:, :int(lyric_right)]
+            bands = lyric_bands(lyric_binary, row_bottom + 0.05 * H, limit, H, cand)
+            # Only the last music row can include the page footer. Apply this
+            # gap check to actual ink rows, never to noisy OCR-box centres.
+            if row_index + 1 == len(row_records):
+                for band_index in range(1, len(bands)):
+                    if bands[band_index][0] - bands[band_index - 1][1] > 1.5 * H:
+                        bands = bands[:band_index]
+                        break
+            local_text = read_cells(engine, color, binary, bands, notes, H)
+            # Partial overlap is not grounds to discard a whole phrase.
+            # Actual ink rows, rather than OCR-box centres, define the verses.
+            verses = group_tokens(cand + local_text, bands)
             row_notes = sorted(notes, key=lambda nd: nd["cx"])
             if VERBOSE_DEBUG:
                 print(f"  [lyr] 行{row_index + 1} 候选文本块 {len(cand)} → 分成 {len(verses)} 段"
@@ -3105,24 +3287,17 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
             for band in verses[:MAX_LYRIC_VERSES]:
                 slots = []          # [(槽文本, 槽的估计 x)]
                 pending = ""        # 块首的标点：攒着，并入下一个汉字槽
-                for tk in band:
-                    text = tk["text"]
-                    if not text:
+                for ch, x in positioned_characters(binary, band, H, row_notes):
+                    if not ch.strip():
                         continue
-                    span = tk["x1"] - tk["x0"]
-                    nl = max(len(text), 1)
-                    for pos, ch in enumerate(text):
-                        if not ch.strip():
-                            continue
-                        x = tk["x0"] + span * (pos + 0.5) / nl
-                        if ch in _LYRIC_PUNCT:
-                            if slots:
-                                slots[-1][0] += ch
-                            else:
-                                pending += ch
+                    if ch in _LYRIC_PUNCT:
+                        if slots:
+                            slots[-1][0] += ch
                         else:
-                            slots.append([pending + ch, x])
-                            pending = ""
+                            pending += ch
+                    else:
+                        slots.append([pending + ch, x])
+                        pending = ""
                 if pending:
                     slots.append([pending, 0.0])        # 整块没有汉字（少见）
                 verse_slots.append(slots)
@@ -3772,6 +3947,13 @@ def ocr_to_stream(image_path, debug_dir=None, measure_mode="vline", header_ocr=T
 
     if not measures:
         raise ValueError("已识别到旋律行，但数字匹配率过低，未生成结果。")
+
+    # Preserve header credits separately from sung lyrics.
+    first_top = min(b["y"] for b in row_records[0]["blocks"])
+    header_items = _ocr(engine, color0[:max(1, int(first_top / scale))])
+    measures[0]["header_text"] = [str(item[1]) for item in sorted(
+        header_items, key=lambda item: (min(p[1] for p in item[0]), min(p[0] for p in item[0])))
+        if _contains_cjk(str(item[1]))]
 
     print(f"[ocr] {kept_rows} 行，数字 {total_labeled}/{total_blocks} 已识别，"
           f"其余以 ? 标记。")

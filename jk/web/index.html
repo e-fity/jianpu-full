@@ -351,6 +351,7 @@
       </p>
 
       <div class="links">
+        <a id="edit-notes" href="#">编辑红框</a>
         <a id="dl-json" href="#">下载 JSON</a>
         <a id="dl-png" href="#">下载替换图</a>
       </div>
@@ -473,6 +474,7 @@
 
   function render(data) {
     currentBase = data.base || null;
+    $("#edit-notes").href = "/review/" + encodeURIComponent(currentBase);
     $("#song").textContent = data.title;
     $("#srcname").textContent = data.original_name;
     $("#m-secs").textContent = data.seconds + " 秒";

@@ -35,3 +35,9 @@ backup_code_*/
 *.log
 _z6.txt
 _run_all.txt
+
+# Digit annotations: retain JSON labels; exclude image crops and exported datasets.
+digit_annotations/**/digits/
+digit_annotations/**/binary/
+digit_annotations/**/sheets/
+digit_datasets/

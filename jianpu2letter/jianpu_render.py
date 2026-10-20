@@ -700,6 +700,12 @@ def render(measures, out_path, title="", key_mark="", meter="",
         ax.text(0.0, 1.6, header, fontsize=13, va="bottom", ha="left",
                 color="0.15", fontfamily=cjk_font or "sans-serif")
 
+    credits = [text for text in (measures[0].get("header_text", []) if measures else [])
+               if "".join(text.split()) != "".join(title.split())]
+    if credits:
+        ax.text(0.0, 1.05, "   ".join(credits), fontsize=10, va="bottom", ha="left",
+                color="0.15", fontfamily=cjk_font or "sans-serif")
+
     # x 范围：OCR 沿用原图位置（并把右边界扩展到能容纳行末小节线，
     # 它们来自原图坐标、可能落在最后一个音符右侧）；MusicXML 按时值取最长行。
     if ocr_mode:

@@ -203,9 +203,16 @@
     </div>
 
     <div class="links">
+      <a id="edit-notes">编辑红框</a>
       <a id="dl-notes">下载 JSON</a>
       <a id="open-over" target="_blank" rel="noopener">单独打开替换图</a>
       <a id="open-src" target="_blank" rel="noopener">单独打开原谱</a>
+    </div>
+
+    <div style="margin-top:16px">
+      <button class="btn" id="sync-lyrics">同步最新歌词</button>
+      <p class="status" id="lyrics-status" role="status" aria-live="polite"></p>
+      <p class="srcname">读取 piano11 同名曲目的最新结果，只同步歌词。同步后请重新生成视频。</p>
     </div>
 
     <div class="videobox">
@@ -274,6 +281,33 @@
     }
   });
 
+  $("#sync-lyrics").addEventListener("click", async () => {
+    if (!current) return;
+    const song = current;
+    const button = $("#sync-lyrics"), status = $("#lyrics-status");
+    button.disabled = true;
+    $("#song").disabled = true;
+    status.textContent = "正在核对原图并同步歌词…";
+    try {
+      const response = await fetch("/api/lyrics/sync/" + encodeURIComponent(song.base), {method: "POST"});
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "同步失败。");
+      status.textContent = `已匹配 ${result.matched} 个音符，更新 ${result.changed} 处歌词，跳过 ${result.skipped.length} 个。`
+        + (result.changed ? "已备份原 JSON；请重新生成视频。" : "已匹配部分的歌词已是最新。")
+        + (result.skipped.length ? "需人工核对：" + result.skipped.join("、") : "");
+      $("#dl-notes").href = song.notes_url + "?v=" + Date.now();
+      if (result.changed) {
+        $("#video").pause();
+        $("#video-wrap").hidden = true;
+      }
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      button.disabled = false;
+      $("#song").disabled = false;
+    }
+  });
+
   const blank = (msg) => {
     const box = document.createElement("div");
     box.className = "missing";
@@ -284,6 +318,8 @@
   function show(song) {
     if (!song) { $("#detail").hidden = true; return; }
     current = song;
+    $("#lyrics-status").textContent = "";
+    $("#edit-notes").href = "/review/" + encodeURIComponent(song.base);
     $("#title").textContent = song.title;
     $("#m-total").textContent = song.counts.total ?? "—";
     const u = song.counts.unknown ?? 0, r = song.counts.rests ?? 0;

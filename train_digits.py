@@ -110,15 +110,77 @@ def collect_from_pair(image_path, json_path, base_dir):
     return feats, labels, note
 
 
+
+def train_samples(samples_path, output_path=None, list_only=False):
+    """Build the existing nearest-neighbour model from confirmed digit samples."""
+    from pathlib import Path
+    import hashlib
+
+    source = Path(samples_path)
+    with np.load(source, allow_pickle=False) as data:
+        feats = data["feats"]
+        labels = data["labels"]
+        groups = data["groups"]
+        ids = data["ids"]
+        if (feats.ndim != 2 or feats.shape[1] != 768 or not len(feats)
+                or not np.isfinite(feats).all()
+                or (feats < 0).any() or (feats > 1).any()):
+            raise ValueError("样本特征必须是非空的 N×768 数组，数值在 0～1 之间")
+        count = len(feats)
+        if (labels.shape != (count,) or not np.issubdtype(labels.dtype, np.integer)
+                or (labels < 0).any() or (labels > 7).any()):
+            raise ValueError("每个样本必须对应一个整数标签 0～7")
+        if groups.shape != (count,) or ids.shape != (count,):
+            raise ValueError("样本来源或编号数量不匹配")
+        if len(np.unique(ids)) != count:
+            raise ValueError("存在重复样本编号，请先用 digit_samples.py 合并去重")
+        feats = feats.astype(np.float32)
+        labels = labels.astype(np.int16)
+
+    counts = {d: int((labels == d).sum()) for d in range(8)}
+    print(f"[样本] {count} 个，来自 {len(np.unique(groups))} 张谱；数字分布 {counts}")
+    print("[训练方式] 最近邻字形模板：保留人工确认的特征和标签，不需要迭代训练。")
+    if list_only:
+        return 0
+    if not output_path:
+        raise ValueError("必须指定候选模型输出位置 --output")
+    output = Path(output_path)
+    if output.exists():
+        raise ValueError(f"模型已存在，不覆盖：{output}")
+    if output.suffix.lower() != ".npz":
+        raise ValueError("模型文件必须以 .npz 结尾")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation prevents accidentally overwriting an existing model.
+    with output.open("xb") as file:
+        np.savez_compressed(file, feats=feats, labels=labels, groups=groups, ids=ids,
+                            source_sha256=np.array(hashlib.sha256(source.read_bytes()).hexdigest()))
+    print(f"[ok] 候选模型：{output}")
+    print("尚未启用；效果对比时通过 JIANPU_DIGIT_MODEL 指定此文件。")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="train_digits.py")
     parser.add_argument("--list", action="store_true", help="只统计，不写模型")
     parser.add_argument("--dir", default=None, help="工作目录（默认脚本所在目录）")
+    parser.add_argument("--samples", help="digit_samples.py 导出的 samples.npz")
+    parser.add_argument("--output", help="候选模型输出路径（--samples 模式必填）")
     args = parser.parse_args(argv)
+    if args.output and not args.samples:
+        parser.error("--output 需要与 --samples 一起使用")
+    if args.samples and not args.list and not args.output:
+        parser.error("--samples 模式必须指定 --output；或加 --list 仅查看")
 
     base_dir = args.dir or os.path.dirname(os.path.abspath(__file__))
     os.chdir(base_dir)
     sys.path.insert(0, base_dir)
+
+    if args.samples:
+        try:
+            return train_samples(args.samples, args.output, args.list)
+        except (ValueError, OSError, KeyError) as exc:
+            print(f"[错误] {exc}")
+            return 1
 
     pairs = load_pairs(base_dir)
     all_feats, all_labels, groups = [], [], []

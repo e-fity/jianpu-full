@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>编辑红框 · 简谱认谱</title>
+<style>
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: #E7E8E5; color: #1B1D1F; font: 14px/1.6 "Microsoft YaHei", sans-serif; }
+  header { padding: 16px 24px; border-bottom: 1px solid #C9CCC6; display: flex; flex-wrap: wrap; gap: 20px; align-items: center; }
+  h1 { margin: 0; font-size: 20px; } a { color: inherit; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; padding: 24px; align-items: start; }
+  .sheet-scroll { overflow: auto; max-height: calc(100vh - 140px); background: #ccc; }
+  #sheet { position: relative; line-height: 0; margin: auto; touch-action: none; user-select: none; }
+  #score { pointer-events: none; }
+  #sheet.drawing { cursor: crosshair; }
+  #sheet.drawing .target { pointer-events: none; }
+  #score { width: 100%; display: block; }
+  #targets { position: absolute; inset: 0; pointer-events: none; }
+  .target { position: absolute; padding: 0; border: 1px solid transparent; background: transparent; pointer-events: auto; cursor: pointer; min-width: 6px; min-height: 6px; transform: translate(-50%, -50%); }
+  .target:hover, .target:focus-visible { border: 1px solid #A5701C; background: transparent; }
+  .target.selected { outline: none; background: transparent; z-index: 1; }
+  #draft { position: absolute; border: 1px solid #23689a; background: transparent; cursor: move; z-index: 3; }
+  .handle { position: absolute; width: 7px; height: 7px; background: transparent; border: 0; transform: translate(-50%, -50%); }
+  .handle[data-dir=nw] { left: 0; top: 0; cursor: nwse-resize; }
+  .handle[data-dir=n], .handle[data-dir=s] { width: max(2px, calc(100% - 4px)); z-index: 2; }
+  .handle[data-dir=e], .handle[data-dir=w] { height: max(2px, calc(100% - 4px)); }
+  .handle[data-dir=n] { left: 50%; top: 0; cursor: ns-resize; }
+  .handle[data-dir=ne] { left: 100%; top: 0; cursor: nesw-resize; }
+  .handle[data-dir=e] { left: 100%; top: 50%; cursor: ew-resize; }
+  .handle[data-dir=se] { left: 100%; top: 100%; cursor: nwse-resize; }
+  .handle[data-dir=s] { left: 50%; top: 100%; cursor: ns-resize; }
+  .handle[data-dir=sw] { left: 0; top: 100%; cursor: nesw-resize; }
+  .handle[data-dir=w] { left: 0; top: 50%; cursor: ew-resize; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .toolbar label { margin: 0; }
+  #new-note[aria-pressed=true] { background: #23689a; color: white; }
+  .coords { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+  .coords label { margin: 0; } .coords input { width: 100%; }
+  aside { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; padding: 0 6px 12px; }
+
+  button, select, input { font: inherit; padding: 7px 10px; border: 1px solid #9AA0A2; background: #FCFBF9; color: inherit; }
+  button { cursor: pointer; } button:disabled { cursor: default; opacity: .5; }
+  select { width: 100%; } label { display: block; margin: 12px 0; }
+  label input[type=checkbox] { margin-right: 6px; }
+  #q { width: 100%; }
+  .actions { display: grid; gap: 10px; margin-top: 18px; }
+  .primary { background: #1B1D1F; color: #fff; }
+  .danger { color: #B5352A; }
+  .hint { color: #6E7377; font-size: 13px; }
+  #status { min-height: 3em; white-space: pre-wrap; }
+  #selection { border-top: 1px solid #C9CCC6; padding-top: 12px; }
+  .downloads { display: flex; gap: 20px; margin-top: 18px; }
+  fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+  @media (max-width: 850px) { main { grid-template-columns: 1fr; padding: 12px; } aside { position: static; max-height: none; } .sheet-scroll { max-height: 55vh; } }
+</style>
+</head>
+<body>
+<header><a href="/library">← 曲库</a><h1 id="title">编辑红框</h1><span>选择已有音符，或手动画框补录漏识别音符。</span></header>
+<main>
+  <section>
+    <label>谱面缩放 <input id="zoom" type="range" min="50" max="200" step="10" value="100"> <span id="zoom-value">100%</span></label>
+    <div class="toolbar"><button id="new-note" type="button" aria-pressed="false" disabled>手动画框 · 新增音符</button><button id="cancel" type="button" disabled>取消未保存修改</button><label><input id="original" type="checkbox">查看原谱</label></div>
+    <div class="sheet-scroll" id="viewport"><div id="sheet"><img id="score" alt="可点选红框的替换谱面"><div id="targets"></div><div id="draft" hidden aria-label="拖动框体移动，拖动边角拉伸"><span class="handle" data-dir="nw"></span><span class="handle" data-dir="n"></span><span class="handle" data-dir="ne"></span><span class="handle" data-dir="e"></span><span class="handle" data-dir="se"></span><span class="handle" data-dir="s"></span><span class="handle" data-dir="sw"></span><span class="handle" data-dir="w"></span></div></div></div>
+  </section>
+  <aside>
+    <p id="summary"></p>
+    <label><input type="checkbox" id="all" checked>显示全部音符（含已消框条目）</label>
+    <label>选择位置<select id="notes" aria-label="选择待编辑位置"></select></label>
+    <p id="selection">请选择一个红框。</p>
+    <fieldset id="editor" disabled>
+      <label>所属谱行<select id="line" aria-label="所属谱行"></select></label>
+      <div class="coords"><label>左侧 X<input id="box-x" type="number" min="0" step="0.1"></label><label>顶部 Y<input id="box-y" type="number" min="0" step="0.1"></label><label>宽度<input id="box-w" type="number" min="2" step="0.1"></label><label>高度<input id="box-h" type="number" min="2" step="0.1"></label></div>
+      <p class="hint" id="position-hint">拖动蓝框移动，拖动八个边角点拉伸；也可输入坐标。</p>
+      <label>指定字母<select id="letter" aria-label="指定字母和音区"></select></label>
+      <label>时值（四分音符 = 1 拍）<input id="q" type="number" min="0.0001" step="any" value="1"></label>
+      <div class="actions">
+        <button id="assign" class="primary" type="button">保存字母到 JSON</button>
+        <button id="box" type="button">仅保存框的位置和大小</button>
+        <button id="hide" type="button">仅消除红框 · 不改 JSON</button>
+        <button id="delete" class="danger" type="button">这是杂项 · 删除 JSON 条目</button>
+      </div>
+    </fieldset>
+    <p class="hint">仅消框会保留原音符和时值。删除条目只移除 JSON 音符和红框，保留谱面字符，避免影响其他已转换字母。指定字母会同步数字、音区、时值和替换图。</p>
+    <p class="hint">拖动、拉伸和填写为草稿，点击保存后生效；新增按所属行内从左到右插入。首次编辑自动备份，已有视频需重新生成。</p>
+    <p id="status" role="status" aria-live="polite">正在读取…</p>
+    <div class="downloads"><a id="download-json">下载 JSON</a><a id="download-png">下载替换图</a></div>
+  </aside>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const base = decodeURIComponent(location.pathname.slice('/review/'.length));
+  const encoded = encodeURIComponent(base);
+  let data, selected = null, draft = null, saving = false, dirty = false, drawing = false, gesture = null;
+  const key = n => `${n.line}:${n.index}`;
+  const status = (message, bad = false) => { $('status').textContent = message; $('status').classList.toggle('danger', bad); };
+  const visible = () => data.notes.filter(n => $('all').checked || n.red);
+  const discard = () => !dirty || confirm('有未保存的修改，是否放弃？');
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  function imageURL() {
+    $('score').src = `/library/img/${encoded}/${$('original').checked ? 'original' : 'overlay'}?v=${data.revision}`;
+  }
+  function resize() {
+    $('sheet').style.width = Math.min(data.width, $('viewport').clientWidth) * Number($('zoom').value) / 100 + 'px';
+    $('zoom-value').textContent = $('zoom').value + '%';
+  }
+  function controls() {
+    $('editor').disabled = saving || !draft || !data.can_edit;
+    $('line').disabled = !!selected;
+    $('hide').disabled = !selected?.red || dirty;
+    $('delete').disabled = !selected || dirty;
+    $('box').disabled = !selected;
+    $('new-note').disabled = saving || !data.can_edit;
+    $('cancel').disabled = saving || (!dirty && !drawing);
+    $('notes').disabled = saving; $('all').disabled = saving;
+    $('assign').textContent = selected ? '保存框和字母到 JSON' : '新增音符并保存到 JSON';
+    $('draft').hidden = !draft || drawing;
+    $('sheet').classList.toggle('drawing', drawing);
+    $('new-note').setAttribute('aria-pressed', String(drawing));
+  }
+  function paintDraft() {
+    if (draft) {
+      const [x,y,w,h] = draft;
+      Object.assign($('draft').style, {left:x/data.width*100+'%',top:y/data.height*100+'%',width:w/data.width*100+'%',height:h/data.height*100+'%'});
+      ['x','y','w','h'].forEach((name,i) => $('box-'+name).value = Math.round(draft[i]*10)/10);
+      const row = Number($('line').value);
+      const next = data.notes.find(n => n.line === row && (!selected || key(n) !== key(selected)) && n.edit_rect[0]+n.edit_rect[2]/2 > x+w/2);
+      $('position-hint').textContent = `保存顺序：第 ${row} 行，${next ? '当前第 '+next.index+' 个音符之前' : '行末'}。拖动框体移动，拖动边角点拉伸。`;
+    }
+    controls();
+  }
+  function select(value, scroll = false) {
+    selected = data.notes.find(n => key(n) === value) || null;
+    draft = selected ? [...selected.edit_rect] : null;
+    dirty = false; drawing = false;
+    $('notes').value = selected ? key(selected) : '';
+    document.querySelectorAll('.target').forEach(el => el.classList.toggle('selected', el.dataset.key === value));
+    $('selection').textContent = selected ? `第 ${selected.line} 行，第 ${selected.index} 个 · 当前 ${selected.letter ?? '未识别'}` : '没有可选条目，可以手动画框新增音符。';
+    $('letter').value = selected?.n == null ? '' : `${selected.n}:${selected.o}`;
+    $('q').value = selected?.q ?? 1;
+    $('line').value = selected?.line ?? data.line_numbers[0];
+    paintDraft();
+    if (scroll) [...$('targets').children].find(el => el.dataset.key === value)?.scrollIntoView({block:'nearest',inline:'nearest'});
+  }
+  function draw(preferred) {
+    const notes = visible();
+    $('notes').replaceChildren(); $('targets').replaceChildren();
+    for (const note of notes) {
+      const label = `第 ${note.line} 行 · 第 ${note.index} 个 · ${note.red ? '红框' : note.letter ?? '未识别（已消框）'}`;
+      $('notes').add(new Option(label, key(note)));
+      const button = document.createElement('button');
+      button.type='button'; button.className='target'; button.dataset.key=key(note);
+      button.title=label; button.setAttribute('aria-label',label);
+      const [x,y,w,h] = note.edit_rect;
+      Object.assign(button.style,{left:(x+w/2)/data.width*100+'%',top:(y+h/2)/data.height*100+'%',width:w/data.width*100+'%',height:h/data.height*100+'%'});
+      button.onkeydown = e => { if (e.key==='Enter' && !saving && discard()) select(key(note)); };
+      $('targets').append(button);
+    }
+    select(notes.some(n=>key(n)===preferred) ? preferred : notes[0] ? key(notes[0]) : '');
+    $('summary').textContent = `剩余 ${data.notes.filter(n=>n.red).length} 个红框 · ${data.counts.total} 个条目 · ${data.counts.unknown} 个未识别`;
+  }
+  function refresh(result) {
+    data=result; dirty=false; drawing=false;
+    $('title').textContent=`${data.title} · 编辑音符与框选`;
+    imageURL();
+    $('download-json').href=`/library/notes/${encoded}?v=${data.revision}`;
+    $('download-json').download=base+'_notes.json';
+    $('download-png').href=`/library/img/${encoded}/overlay?v=${data.revision}`;
+    $('download-png').download=base+'_overlay.png';
+    $('letter').replaceChildren(new Option('请选择字母',''));
+    for(const choice of data.choices) $('letter').add(new Option(choice.label,`${choice.n}:${choice.o}`));
+    $('line').replaceChildren();
+    for(const row of data.line_numbers) $('line').add(new Option(`第 ${row} 行`,row));
+    const preferred = result.selected ? key(result.selected) : selected ? key(selected) : null;
+    if (result.selected) $('all').checked=true;
+    resize(); draw(preferred);
+  }
+  function point(event) {
+    const r=$('score').getBoundingClientRect();
+    return [clamp((event.clientX-r.left)/r.width*data.width,0,data.width),clamp((event.clientY-r.top)/r.height*data.height,0,data.height)];
+  }
+  function nearestLine(y) {
+    let best=data.line_numbers[0], distance=Infinity;
+    for(const row of data.line_numbers) {
+      const ys=data.notes.filter(n=>n.line===row).map(n=>n.edit_rect[1]+n.edit_rect[3]/2).sort((a,b)=>a-b);
+      if(ys.length && Math.abs(ys[Math.floor(ys.length/2)]-y)<distance) {distance=Math.abs(ys[Math.floor(ys.length/2)]-y); best=row;}
+    }
+    return best;
+  }
+  $('sheet').addEventListener('pointerdown',event=>{
+    if(saving || !data?.can_edit || event.button!==0 || !data.line_numbers.length) return;
+    const p=point(event);
+    if(drawing) {
+      selected=null; draft=[p[0],p[1],0,0]; dirty=true;
+      $('letter').value=''; $('q').value=1; $('line').value=nearestLine(p[1]);
+      $('selection').textContent='新增音符草稿 · 请确认所属谱行、字母和时值';
+      gesture={mode:'new',start:p,before:null};
+    } else {
+      const target=event.target.closest('.target');
+      if(target && target.dataset.key!== (selected ? key(selected) : '')) {if(!discard())return; select(target.dataset.key);}
+      if(!draft || (!target && !event.target.closest('#draft'))) return;
+      gesture={mode:event.target.dataset.dir || 'move',start:p,before:[...draft]};
+    }
+    event.preventDefault(); $('sheet').setPointerCapture(event.pointerId);
+  });
+  $('sheet').addEventListener('pointermove',event=>{
+    if(!gesture)return;
+    const p=point(event), dx=p[0]-gesture.start[0], dy=p[1]-gesture.start[1];
+    if(gesture.mode==='new') {draft=[Math.min(p[0],gesture.start[0]),Math.min(p[1],gesture.start[1]),Math.abs(dx),Math.abs(dy)]; drawing=false;}
+    else {
+      const [x,y,w,h]=gesture.before;
+      if(gesture.mode==='move') draft=[clamp(x+dx,0,data.width-w),clamp(y+dy,0,data.height-h),w,h];
+      else {
+        let left=x,top=y,right=x+w,bottom=y+h;
+        if(gesture.mode.includes('w'))left=clamp(x+dx,0,right-2);
+        if(gesture.mode.includes('e'))right=clamp(x+w+dx,left+2,data.width);
+        if(gesture.mode.includes('n'))top=clamp(y+dy,0,bottom-2);
+        if(gesture.mode.includes('s'))bottom=clamp(y+h+dy,top+2,data.height);
+        draft=[left,top,right-left,bottom-top];
+      }
+    }
+    if(Math.abs(dx)+Math.abs(dy)>.05) dirty=true;
+    paintDraft();
+  });
+  function endGesture(event) {
+    if(!gesture)return;
+    const cancelled=event.type==='pointercancel';
+    if(cancelled) draft=gesture.before;
+    if(draft && (draft[2]<2 || draft[3]<2)) {draft=null;status('框太小，请重新拖出完整数字范围。',true);}
+    gesture=null; drawing=false;
+    if($('sheet').hasPointerCapture(event.pointerId)) $('sheet').releasePointerCapture(event.pointerId);
+    paintDraft();
+  }
+  $('sheet').addEventListener('pointerup',endGesture);
+  $('sheet').addEventListener('pointercancel',endGesture);
+  $('new-note').onclick=()=>{if(discard()){drawing=true;draft=null;selected=null;dirty=false;controls();status('在谱面拖出一个框，覆盖完整数字；松开后可继续移动、拉伸。');}};
+  $('cancel').onclick=()=>{draw(selected ? key(selected) : null);status('已取消未保存修改。');};
+  $('line').onchange=()=>{dirty=true;paintDraft();};
+  for(const name of ['x','y','w','h']) $('box-'+name).onchange=()=>{
+    const box=['x','y','w','h'].map(k=>Number($('box-'+k).value));
+    if(box.some(v=>!Number.isFinite(v)) || box[0]<0 || box[1]<0 || box[2]<2 || box[3]<2 || box[0]+box[2]>data.width || box[1]+box[3]>data.height) {status('框必须在图片内，宽高至少 2 像素。',true);paintDraft();return;}
+    draft=box;dirty=true;paintDraft();
+  };
+  for(const id of ['letter','q']) $(id).oninput=()=>{dirty=true;controls();};
+  async function save(action) {
+    if(saving || !draft)return;
+    if(action==='assign' && !selected)action='add';
+    const body={action,line:selected?.line ?? Number($('line').value),index:selected?.index,revision:data.revision};
+    if(['assign','add','box'].includes(action)) {
+      if(draft[2]<2 || draft[3]<2){status('请先画出完整的框。',true);return;}
+      body.image_box=draft;
+    }
+    if(['assign','add'].includes(action)) {
+      if(!$('letter').value){status('请先选择字母。',true);return;}
+      [body.n,body.o]=$('letter').value.split(':').map(Number);body.q=Number($('q').value);
+      if(!Number.isFinite(body.q)||body.q<=0){status('时值必须是正数。',true);return;}
+    }
+    saving=true;controls();status('正在保存…');
+    try {
+      const response=await fetch(`/api/review/${encoded}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const result=await response.json();
+      if(!response.ok||!result.ok)throw new Error(result.error||'保存失败');
+      refresh(result);
+      status({hide:'已消除红框，JSON 完全未改。',delete:'已删除 JSON 条目及其时值，仅清除红框，保留谱面字符。',assign:'框、字母、音高和时值已保存到 JSON。',add:'已按谱面位置新增音符，JSON 和替换图已保存。',box:'框的位置和大小已保存，音高与时值保持不变。'}[action]);
+    }catch(error){status(error.message,true);}
+    finally{saving=false;controls();}
+  }
+  $('all').onchange=()=>{if(discard())draw(selected?key(selected):null);else $('all').checked=!$('all').checked;};
+  $('notes').onchange=()=>{if(discard())select($('notes').value,true);else $('notes').value=selected?key(selected):'';};
+  $('original').onchange=()=>imageURL();
+  $('zoom').oninput=()=>{if(data)resize();};
+  window.addEventListener('resize',()=>{if(data)resize();});
+  window.addEventListener('beforeunload',event=>{if(dirty){event.preventDefault();event.returnValue='';}});
+  for(const action of ['hide','delete','assign','box']) $(action).onclick=()=>save(action);
+  fetch(`/api/review/${encoded}`,{cache:'no-store'}).then(async response=>{
+    const result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.error||'读取失败');
+    refresh(result);status(data.can_edit?'选择音符调整蓝框，或点击“手动画框”补录。':'找不到原图，请恢复 JSON 的 source 路径对应图片。',!data.can_edit);
+  }).catch(error=>status(error.message,true));
+})();
+</script>
+</body>
+</html>
